@@ -1,0 +1,48 @@
+{
+  "timestamp": "2026-03-28T12:56:30.407671",
+  "proposals": [
+    {
+      "id": "001",
+      "category": "止损调整",
+      "issue": "持仓 US.MU 亏损-354.5%",
+      "suggestion": "检查是否触发止损条件，考虑减仓",
+      "priority": "高"
+    },
+    {
+      "id": "002",
+      "category": "止损调整",
+      "issue": "持仓 US.CEG 亏损-146.4%",
+      "suggestion": "检查是否触发止损条件，考虑减仓",
+      "priority": "高"
+    },
+    {
+      "id": "003",
+      "category": "止损调整",
+      "issue": "持仓 US.SNDK 亏损-175.7%",
+      "suggestion": "检查是否触发止损条件，考虑减仓",
+      "priority": "高"
+    },
+    {
+      "id": "004",
+      "category": "止损调整",
+      "issue": "持仓 US.CIEN 亏损-6.4%",
+      "suggestion": "检查是否触发止损条件，考虑减仓",
+      "priority": "高"
+    },
+    {
+      "id": "005",
+      "category": "止损调整",
+      "issue": "持仓 US.MO 亏损-17.3%",
+      "suggestion": "检查是否触发止损条件，考虑减仓",
+      "priority": "高"
+    },
+    {
+      "id": "006",
+      "category": "行业权重",
+      "issue": "当前最强权重: 新能源汽车 (2.0)",
+      "suggestion": "根据市场表现调整行业权重",
+      "priority": "低"
+    }
+  ],
+  "status": "pending_confirm"
+}

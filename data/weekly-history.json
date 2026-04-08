@@ -1,0 +1,17 @@
+{
+  "2026-04-07": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1005548.657,
+        "cash": -934918.376,
+        "position_value": 1940467.033
+      },
+      "15270899": {
+        "total_asset": 999810.687,
+        "cash": 999810.687,
+        "position_value": 0.0
+      }
+    },
+    "closed_trades": 0
+  }
+}

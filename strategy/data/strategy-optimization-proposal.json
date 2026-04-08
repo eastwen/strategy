@@ -1,0 +1,20 @@
+{
+  "timestamp": "2026-03-28T13:04:53.392588",
+  "proposals": [
+    {
+      "id": "001",
+      "category": "仓位调整",
+      "issue": "市场处于恐慌区(VHSI=28.02, VIX=31.1)",
+      "suggestion": "建议减仓至30%以下，等待市场企稳",
+      "priority": "高"
+    },
+    {
+      "id": "002",
+      "category": "执行日报建议",
+      "issue": "日报建议减仓",
+      "suggestion": "**减仓建议**：建议减仓至30-40%，等待市场企稳",
+      "priority": "高"
+    }
+  ],
+  "status": "pending_confirm"
+}

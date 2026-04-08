@@ -1,0 +1,111 @@
+[
+  {
+    "symbol": "HK.00012",
+    "shares": 1000,
+    "entry_price": 29.98,
+    "entry_time": "2026-04-08T15:56:40.771390",
+    "market": "hk",
+    "entry_score": 100,
+    "entry_reasons": [
+      "评分100分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=68.8在35-70区间",
+      "⚠️ 成交量仅0.8倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T15:56:40.771409"
+  },
+  {
+    "symbol": "US.AVGO",
+    "shares": 383,
+    "entry_price": 333.97,
+    "entry_time": "2026-04-08T21:46:36.833156",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T21:46:36.833599"
+  },
+  {
+    "symbol": "US.UNH",
+    "shares": 416,
+    "entry_price": 307.73,
+    "entry_time": "2026-04-08T21:53:38.406576",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "⚠️ RSI=65.3≥65，不建议入场",
+      "⚠️ 成交量仅0.2倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T21:53:38.406624"
+  },
+  {
+    "symbol": "US.PSKY",
+    "shares": 11760,
+    "entry_price": 10.9,
+    "entry_time": "2026-04-08T21:53:40.399387",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "⚠️ RSI=84.1≥65，不建议入场",
+      "⚠️ 成交量仅0.2倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T21:53:40.399412"
+  },
+  {
+    "symbol": "US.VST",
+    "shares": 797,
+    "entry_price": 160.75,
+    "entry_time": "2026-04-08T21:57:58.784735",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ RSI=39.9<65，可入场",
+      "⚠️ 成交量仅0.1倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T21:57:58.784750"
+  },
+  {
+    "symbol": "US.ORCL",
+    "shares": 881,
+    "entry_price": 145.34,
+    "entry_time": "2026-04-08T22:28:27.994214",
+    "market": "us",
+    "entry_score": 100,
+    "entry_reasons": [],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T22:28:27.994301"
+  },
+  {
+    "symbol": "US.GOOGL",
+    "shares": 403,
+    "entry_price": 316.12,
+    "entry_time": "2026-04-08T23:23:18.149134",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-08T23:23:18.149183"
+  },
+  {
+    "symbol": "US.MSFT",
+    "shares": 336,
+    "entry_price": 378.6,
+    "entry_time": "2026-04-09T00:46:43.084028",
+    "market": "us",
+    "entry_score": 90,
+    "entry_reasons": [],
+    "peak_pnl_pct": 0.0,
+    "peak_time": "2026-04-09T00:46:43.084053"
+  }
+]

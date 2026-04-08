@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "skills": {
+    "skill-vetter": {
+      "version": "1.0.0",
+      "installedAt": 1773742322688
+    },
+    "find-skills": {
+      "version": "0.1.0",
+      "installedAt": 1773742681533
+    },
+    "summarize": {
+      "version": "1.0.0",
+      "installedAt": 1773742684895
+    },
+    "proactive-agent": {
+      "version": "3.1.0",
+      "installedAt": 1773742741802
+    },
+    "self-improving": {
+      "version": "1.2.16",
+      "installedAt": 1773742745939
+    },
+    "multi-search-engine": {
+      "version": "2.0.1",
+      "installedAt": 1773742801025
+    },
+    "free-ride": {
+      "version": "1.0.5",
+      "installedAt": 1773742861688
+    },
+    "clawdhub": {
+      "version": "1.0.0",
+      "installedAt": 1773742865158
+    },
+    "stock-market-pro": {
+      "version": "1.2.12",
+      "installedAt": 1773742921921
+    },
+    "agent-browser": {
+      "version": "0.2.0",
+      "installedAt": 1773742980984
+    },
+    "skill-creator": {
+      "version": "0.1.0",
+      "installedAt": 1773743101708
+    },
+    "risk-manager-skill": {
+      "version": "1.0.0",
+      "installedAt": 1774028320036
+    },
+    "quant-trading": {
+      "version": "1.0.0",
+      "installedAt": 1774028341737
+    },
+    "financial-analyst": {
+      "version": "1.0.0",
+      "installedAt": 1774028351027
+    },
+    "news-aggregator": {
+      "version": "1.0.3",
+      "installedAt": 1774028358967
+    },
+    "news-sentiment": {
+      "version": "1.0.2",
+      "installedAt": 1774028883130
+    },
+    "tushare": {
+      "version": "1.0.9",
+      "installedAt": 1774030981884
+    },
+    "self-improving-agent": {
+      "version": "3.0.6",
+      "installedAt": 1774421222188
+    },
+    "longbridge": {
+      "version": "1.0.1",
+      "installedAt": 1774462213000
+    }
+  }
+}

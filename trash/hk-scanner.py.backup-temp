@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""
+港股扫描器 v2.0
+扫描恒生指数(90只) + 恒生科技指数(30只) = 101只
+数据源：Futu OpenD（主） / Tushare（备）
+扫描时间：开盘前10分钟、交易时段（午休不扫描）
+"""
+
+import sys
+import json
+import time
+import requests
+from datetime import datetime, date, time as dt_time
+
+sys.path.insert(0, '/home/admin/.openclaw/workspace/futu-venv/lib/python3.14/site-packages')
+
+class HKScanner:
+    """港股扫描器 - 支持备用数据源"""
+    
+    def __init__(self):
+        self.load_api_keys()
+        self.load_stock_pool()
+        self.load_config()
+        self.data_source = 'futu'  # 默认使用Futu
+    
+    def load_api_keys(self):
+        """加载API密钥"""
+        with open('/home/admin/.openclaw/workspace/strategy/.api-keys.json', 'r') as f:
+            self.keys = json.load(f)
+        
+        self.futu_host = '127.0.0.1'
+        self.futu_port = 11111
+        self.tushare_token = self.keys.get('tushare', {}).get('token', '')
+    
+    def load_stock_pool(self):
+        """加载港股成分股（恒生指数 + 恒生科技），去重"""
+        try:
+            with open('./strategy/hk-index-constituents.json', 'r') as f:
+                data = json.load(f)
+            
+            self.hsi = data.get('hsi', [])
+            self.hstech = data.get('hstech', [])
+            
+            # 去重
+            self.stocks = list(dict.fromkeys(self.hsi + self.hstech))
+            
+            # 标记重叠
+            overlap = len(set(self.hsi) & set(self.hstech))
+            
+            print(f"✅ 恒生指数: {len(self.hsi)}只")
+            print(f"✅ 恒生科技: {len(self.hstech)}只")
+            print(f"✅ 重叠股票: {overlap}只（已去重）")
+            print(f"✅ 合并去重: {len(self.stocks)}只")
+        except Exception as e:
+            print(f"❌ 加载成分股失败: {e}")
+            self.stocks = []
+            self.hsi = []
+            self.hstech = []
+    
+    def load_config(self):
+        """加载策略配置"""
+        with open('./config/hk-strategy-dynamic-v2.0.json', 'r') as f:
+            self.config = json.load(f)
+    
+    def should_scan(self):
+        """判断是否应该扫描"""
+        now = datetime.now()
+        current_time = now.time()
+        
+        # 首先检查是否为交易日
+        try:
+            from trading_calendar import TradingCalendar
+            calendar = TradingCalendar()
+            is_trading_day, reason = calendar.is_hk_trading_day()
+            if not is_trading_day:
+                return False, f"非交易日 ({reason})"
+        except:
+            # 如果交易日历检查失败，使用原有的周末检查
+            if now.weekday() >= 5:
+                return False, "周末"
+        
+        # 扫描时段
+        scan_times = {
+            'pre_market': [(9, 20), (9, 30)],
+            'morning': [(9, 30), (12, 0)],
+            'afternoon': [(13, 0), (16, 10)],
+        }
+        
+        for session, (start, end) in scan_times.items():
+            start_time = dt_time(start[0], start[1])
+            end_time = dt_time(end[0], end[1])
+            
+            if start_time <= current_time <= end_time:
+                return True, session
+        
+        if dt_time(12, 0) <= current_time <= dt_time(13, 0):
+            return False, "午休时间"
+        
+        return False, "非扫描时间"
+    
+    def calculate_score(self, price, prev_close, volume=None, news_sentiment=None):
+        """计算评分（包含新闻情绪因素）"""
+        score = 60
+        
+        # 1. 技术面评分（60%）
+        change_pct = (price - prev_close) / prev_close * 100 if prev_close > 0 else 0
+        
+        if change_pct > 3:
+            score += 25
+        elif change_pct > 2:
+            score += 20
+        elif change_pct > 1:
+            score += 15
+        elif change_pct > 0:
+            score += 5
+        elif change_pct < -3:
+            score -= 25
+        elif change_pct < -2:
+            score -= 20
+        elif change_pct < -1:
+            score -= 10
+        
+        # 2. 新闻情绪加成（四源共振-国际资讯30%）
+        if news_sentiment:
+            if news_sentiment > 0.6:  # 正面新闻
+                score += 15
+            elif news_sentiment < 0.4:  # 负面新闻
+                score -= 10
+        
+        return min(100, max(0, score))
+    
+    def scan_with_futu(self, top_n=50):
+        """使用Futu OpenD扫描"""
+        from futu import OpenQuoteContext, RET_OK
+        
+        print(f"  使用数据源: Futu OpenD")
+        
+        results = []
+        quote_ctx = OpenQuoteContext(self.futu_host, self.futu_port)
+        
+        try:
+            total = len(self.stocks)
+            
+            for i, code in enumerate(self.stocks):
+                try:
+                    if (i + 1) % 20 == 0:
+                        print(f"    进度: {i+1}/{total}")
+                    
+                    ret, snapshot = quote_ctx.get_market_snapshot([code])
+                    
+                    if ret == RET_OK and not snapshot.empty:
+                        row = snapshot.iloc[0]
+                        price = row.get('last_price')
+                        prev_close = row.get('prev_close_price')
+                        volume = row.get('volume', 0)
+                        
+                        # 过滤无效数据
+                        if price is None or price == 'N/A' or price == 0:
+                            continue
+                        if prev_close is None or prev_close == 'N/A' or prev_close == 0:
+                            continue
+                        
+                        # 过滤没有成交量的股票
+                        try:
+                            volume_float = float(volume) if volume and volume != 'N/A' else 0
+                            if volume_float == 0:
+                                continue
+                        except:
+                            continue
+                        
+                        price_float = float(price)
+                        prev_close_float = float(prev_close)
+                        change_pct = (price_float - prev_close_float) / prev_close_float * 100
+                        
+                        score = self.calculate_score(price_float, prev_close_float, volume_float)
+                        
+                        # 判断所属指数
+                        index = ""
+                        if code in self.hsi:
+                            index = "恒生指数"
+                        if code in self.hstech:
+                            index += "恒生科技" if not index else "+恒生科技"
+                        
+                        if score >= 50:
+                            results.append({
+                                'symbol': code,
+                                'name': row.get('stock_name', ''),
+                                'price': price_float,
+                                'prev_close': prev_close_float,
+                                'change_pct': round(change_pct, 2),
+                                'base_score': score,
+                                'index': index,
+                                'sector': index,
+                                'timestamp': datetime.now().isoformat()
+                            })
+                except:
+                    continue
+        finally:
+            quote_ctx.close()
+        
+        return results
+    
+    def scan_with_tushare(self, top_n=50):
+        """使用Tushare扫描（备用）"""
+        print(f"  使用数据源: Tushare（备用）")
+        
+        results = []
+        url = "https://api.tushare.pro/pro"
+        
+        for i, code in enumerate(self.stocks):
+            try:
+                code_num = code.replace('HK.', '')
+                
+                # 获取行情数据
+                data = {
+                    "api_name": "hk_daily",
+                    "token": self.tushare_token,
+                    "params": {
+                        "ts_code": f"{code_num}.HK",
+                        "start_date": datetime.now().strftime('%Y%m%d'),
+                        "end_date": datetime.now().strftime('%Y%m%d')
+                    }
+                }
+                
+                res = requests.post(url, json=data, timeout=10)
+                
+                if res.status_code == 200:
+                    result = res.json()
+                    if result.get('data') and result['data'].get('fields'):
+                        rows = result['data'].get('items', [])
+                        if rows:
+                            row = rows[0]
+                            # 解析数据
+                            close = row[5] if len(row) > 5 else 0
+                            pre_close = row[6] if len(row) > 6 else 0
+                            
+                            if close and pre_close:
+                                change_pct = (close - pre_close) / pre_close * 100
+                                score = self.calculate_score(close, pre_close)
+                                
+                                if score >= 50:
+                                    index = ""
+                                    if code in self.hsi:
+                                        index = "恒生指数"
+                                    if code in self.hstech:
+                                        index += "恒生科技" if not index else "+恒生科技"
+                                    
+                                    results.append({
+                                        'symbol': code,
+                                        'name': '',
+                                        'price': close,
+                                        'prev_close': pre_close,
+                                        'change_pct': round(change_pct, 2),
+                                        'base_score': score,
+                                        'index': index,
+                                        'sector': index,
+                                        'timestamp': datetime.now().isoformat()
+                                    })
+                
+                time.sleep(0.1)
+            except:
+                continue
+        
+        return results
+    
+    def scan(self, top_n=50):
+        """扫描港股市场"""
+        print(f"\n{'='*60}")
+        print(f"🇭🇰 港股扫描器 v2.0")
+        print(f"{'='*60}")
+        print(f"股票池: 恒生指数({len(self.hsi)}只) + 恒生科技({len(self.hstech)}只) = {len(self.stocks)}只")
+        print(f"扫描时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*60}\n")
+        
+        should, reason = self.should_scan()
+        if not should:
+            print(f"⏸️ 当前{reason}，跳过扫描")
+            return []
+        
+        print(f"✅ 当前扫描时段: {reason}\n")
+        
+        # 尝试主数据源
+        try:
+            results = self.scan_with_futu(top_n)
+            self.data_source = 'futu'
+        except Exception as e:
+            print(f"⚠️ Futu数据源失败: {e}")
+            print(f"  切换到备用数据源...")
+            
+            # 使用备用数据源
+            try:
+                results = self.scan_with_tushare(top_n)
+                self.data_source = 'tushare'
+            except Exception as e2:
+                print(f"❌ 备用数据源也失败: {e2}")
+                return []
+        
+        results.sort(key=lambda x: x['base_score'], reverse=True)
+        top_results = results[:top_n]
+        
+        self.save_results(top_results)
+        
+        print(f"\n✅ 扫描完成: {len(results)}/{len(self.stocks)}只有效")
+        print(f"📊 高评分股票(≥70分): {len([r for r in results if r['base_score'] >= 70])}只")
+        print(f"📡 数据源: {self.data_source}")
+        
+        return top_results
+    
+    def save_results(self, results):
+        """保存扫描结果"""
+        data = {
+            'market': 'HK',
+            'last_scan': datetime.now().isoformat(),
+            'data_source': self.data_source,
+            'total_scanned': len(results),
+            'stock_pool': {
+                'hsi': len(self.hsi),
+                'hstech': len(self.hstech),
+                'total': len(self.stocks)
+            },
+            'opportunities': results
+        }
+        
+        with open('./data/hk-opportunities.json', 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"💾 结果已保存")
+    
+    def print_top_results(self, results, n=10):
+        """打印Top N结果"""
+        print(f"\n📊 港股Top {n}高评分股票:")
+        print("-" * 80)
+        print(f"{'代码':<12} {'名称':<10} {'价格':>10} {'涨幅':>8} {'评分':>6} {'指数':<15}")
+        print("-" * 80)
+        
+        for r in results[:n]:
+            print(f"{r['symbol']:<12} {r['name'][:8]:<10} ${r['price']:>8.2f} {r['change_pct']:>+7.2f}% {r['base_score']:>5}分 {r['index']:<15}")
+
+
+if __name__ == '__main__':
+    # 导入交易日历
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/..')
+    
+    try:
+        from trading_calendar import TradingCalendar
+        calendar = TradingCalendar()
+        
+        # 检查是否为港股交易日
+        is_trading_day, reason = calendar.is_hk_trading_day()
+        
+        if not is_trading_day:
+            print(f"⏸️ 港股非交易日: {reason}")
+            print(f"💡 跳过扫描")
+            sys.exit(0)
+    except Exception as e:
+        print(f"⚠️ 交易日历检查失败: {e}")
+        print("💡 继续执行扫描...")
+    
+    # 执行扫描
+    scanner = HKScanner()
+    results = scanner.scan(top_n=50)
+    if results:
+        scanner.print_top_results(results, n=15)

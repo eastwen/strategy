@@ -1,0 +1,55 @@
+{
+  "version": "2.0",
+  "updated": "2026-03-25",
+  "name": "港股动态调整策略",
+  
+  "trading_hours": {
+    "config_file": "../config/hk-trading-hours.json",
+    "description": "港股交易时间配置"
+  },
+  
+  "strategy": {
+    "description": "根据行业表现动态调整权重",
+    "core_logic": "表现好的行业多配，表现差的少配"
+  },
+  
+  "sector_weights": {},
+  
+  "recommended_stocks": [
+    {"code": "HK.09868", "name": "小鹏汽车-W", "sector": "新能源汽车", "weight": 2.00},
+    {"code": "HK.09866", "name": "蔚来-SW", "sector": "新能源汽车", "weight": 2.00},
+    {"code": "HK.02333", "name": "比亚迪股份", "sector": "新能源汽车", "weight": 2.00},
+    {"code": "HK.02331", "name": "李宁", "sector": "消费", "weight": 1.85},
+    {"code": "HK.02319", "name": "蒙牛乳业", "sector": "消费", "weight": 1.85},
+    {"code": "HK.02020", "name": "安踏体育", "sector": "消费", "weight": 1.85},
+    {"code": "HK.02269", "name": "药明生物", "sector": "医药", "weight": 0.81},
+    {"code": "HK.01093", "name": "石药集团", "sector": "医药", "weight": 0.81}
+  ],
+  
+  "backtest_results": {
+    "新能源汽车": {"avg_pnl": 2.58, "win_rate": 100},
+    "消费": {"avg_pnl": 2.31, "win_rate": 100},
+    "医药": {"avg_pnl": 0.43, "win_rate": 50},
+    "金融": {"avg_pnl": -0.64, "win_rate": 50},
+    "互联网科技": {"avg_pnl": -0.68, "win_rate": 0}
+  },
+  
+  "entry_conditions": {
+    "volume_surge": ">= 1.5x",
+    "rsi_range": "20-80",
+    "trend": "MA20上升, 价格>MA20",
+    "enhance_signals": ">= 1个 (突破高点 或 布林收缩)"
+  },
+  
+  "exit_conditions": {
+    "stop_loss": "ATR 1.5x",
+    "take_profit": "ATR 3.0x",
+    "rsi_overbought": "> 70",
+    "max_hold_days": 10
+  },
+  
+  "position_sizing": {
+    "base": "3%",
+    "adjustment": "根据行业权重调整"
+  }
+}

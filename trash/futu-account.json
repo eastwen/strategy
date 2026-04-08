@@ -1,0 +1,129 @@
+{
+  "source": "futu_simulate",
+  "sync_time": "2026-04-02T11:20:02.755658",
+  "accounts": [
+    {
+      "acc_id": 15270898,
+      "acc_type": "MARGIN",
+      "total_assets": 991973.895,
+      "cash": -813402.965,
+      "market_val": 1805376.86,
+      "securities_assets": 991973.895
+    }
+  ],
+  "positions": [
+    {
+      "acc_id": 15270898,
+      "symbol": "US.GOOG",
+      "shares": 404,
+      "cost_price": 296.05,
+      "market_val": 119139.6,
+      "pl_ratio": -0.003884478973146428
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.META",
+      "shares": 203,
+      "cost_price": 585.24,
+      "market_val": 117583.69,
+      "pl_ratio": -0.010269291230947986
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.ETR",
+      "shares": 1104,
+      "cost_price": 110.205,
+      "market_val": 125392.32,
+      "pl_ratio": 0.030624744793793388
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.AMD",
+      "shares": 568,
+      "cost_price": 212.24,
+      "market_val": 119399.28,
+      "pl_ratio": -0.009564643799472295
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.GEV",
+      "shares": 139,
+      "cost_price": 848.36,
+      "market_val": 124374.42,
+      "pl_ratio": 0.054717336979584134
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.LRCX",
+      "shares": 566,
+      "cost_price": 208.445,
+      "market_val": 125657.66,
+      "pl_ratio": 0.06507711866439589
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.LII",
+      "shares": 255,
+      "cost_price": 452.945,
+      "market_val": 118534.2,
+      "pl_ratio": 0.026261466623983046
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.CRM",
+      "shares": 635,
+      "cost_price": 186.61,
+      "market_val": 118262.4,
+      "pl_ratio": -0.0019827447618026898
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.MU",
+      "shares": 329,
+      "cost_price": 369.4,
+      "market_val": 121022.65,
+      "pl_ratio": -0.004195993502977802
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.GOOGL",
+      "shares": 404,
+      "cost_price": 297.04,
+      "market_val": 120145.56,
+      "pl_ratio": 0.0011782924858604901
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.ADEA",
+      "shares": 4924,
+      "cost_price": 23.7,
+      "market_val": 123444.68,
+      "pl_ratio": 0.05780590717299578
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.TTD",
+      "shares": 5340,
+      "cost_price": 22.7,
+      "market_val": 117373.2,
+      "pl_ratio": -0.03171806167400881
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.MO",
+      "shares": 3642,
+      "cost_price": 66.545,
+      "market_val": 238478.16,
+      "pl_ratio": -0.0160042076790142
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.COP",
+      "shares": 908,
+      "cost_price": 133.21,
+      "market_val": 116569.04,
+      "pl_ratio": -0.03625853914871256
+    }
+  ],
+  "trades": []
+}

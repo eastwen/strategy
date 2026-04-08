@@ -1,0 +1,141 @@
+{
+  "version": "1.1",
+  "description": "港股交易时间配置（优化版）",
+  "last_updated": "2026-03-25",
+  "optimization_note": "按建议优化：无夜盘，开市前10分钟开始扫描",
+  
+  "market": "Hong Kong",
+  "exchange": "HKEX",
+  "timezone": "Asia/Hong_Kong",
+  "utc_offset": "+08:00",
+  
+  "regular_session": {
+    "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    "pre_market": {
+      "enabled": true,
+      "start": "09:00",
+      "end": "09:20",
+      "description": "开市前竞价时段"
+    },
+    "morning_session": {
+      "enabled": true,
+      "start": "09:30",
+      "end": "12:00",
+      "description": "早市"
+    },
+    "lunch_break": {
+      "enabled": true,
+      "start": "12:00",
+      "end": "13:00",
+      "description": "午休"
+    },
+    "afternoon_session": {
+      "enabled": true,
+      "start": "13:00",
+      "end": "16:00",
+      "description": "午市"
+    }
+  },
+  
+  "extended_hours": {
+    "overnight": {
+      "enabled": false,
+      "description": "港股无夜盘交易"
+    },
+    "evening": {
+      "enabled": false,
+      "description": "港股收盘后不扫描"
+    }
+  },
+  
+  "trading_calendar": {
+    "holidays_2026": [
+      "2026-01-01",
+      "2026-01-27",
+      "2026-01-28",
+      "2026-01-29",
+      "2026-04-03",
+      "2026-04-04",
+      "2026-04-07",
+      "2026-05-01",
+      "2026-05-05",
+      "2026-06-18",
+      "2026-07-01",
+      "2026-09-17",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-07",
+      "2026-12-25",
+      "2026-12-26"
+    ],
+    "half_days": ["2026-12-24"]
+  },
+  
+  "scanning_schedule": {
+    "pre_market_scan": {
+      "time": "08:50",
+      "description": "开市前10分钟扫描（08:50）"
+    },
+    "morning_scan": {
+      "time": "11:30",
+      "description": "早市收盘前30分钟扫描"
+    },
+    "afternoon_scan": {
+      "time": "15:30",
+      "description": "收市前30分钟扫描"
+    },
+    "closing_scan": {
+      "time": "16:10",
+      "description": "收市后数据分析"
+    }
+  },
+  
+  "reporting_schedule": {
+    "daily_report": {
+      "time": "16:10",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "description": "港股日报（收盘后）"
+    },
+    "weekly_report": {
+      "time": "15:00",
+      "day": "Saturday",
+      "description": "周报"
+    },
+    "monthly_report": {
+      "time": "16:10",
+      "day": "last_day",
+      "description": "月报（月末）"
+    }
+  },
+  
+  "risk_parameters": {
+    "pre_market": {
+      "position_limit": 0.3,
+      "stop_loss_multiplier": 0.7,
+      "take_profit_multiplier": 1.3,
+      "description": "竞价时段，流动性较低"
+    },
+    "morning_session": {
+      "position_limit": 0.8,
+      "stop_loss_multiplier": 0.9,
+      "take_profit_multiplier": 1.8,
+      "description": "早市，中等流动性"
+    },
+    "afternoon_session": {
+      "position_limit": 1.0,
+      "stop_loss_multiplier": 1.0,
+      "take_profit_multiplier": 2.0,
+      "description": "午市，高流动性"
+    }
+  },
+  
+  "implementation_notes": [
+    "港股交易时间：09:30-12:00, 13:00-16:00",
+    "开市前竞价时段：09:00-09:20",
+    "午休：12:00-13:00",
+    "港股无夜盘交易，只在交易时段扫描",
+    "扫描时间：开市前10分钟（08:50）开始",
+    "新闻获取：24小时不间断",
+    "周末及节假日休市"
+  ]
+}

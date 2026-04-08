@@ -1,0 +1,238 @@
+{
+  "version": "1.1",
+  "updated": "2026-03-25",
+  "name": "美股全时段交易时间配置",
+  "description": "支持夜盘、盘前、盘中、盘后全时段交易",
+  
+  "trading_sessions": {
+    "description": "美股交易时段划分",
+    "sessions": {
+      "overnight": {
+        "name": "夜盘",
+        "time_range": ["22:00", "04:00"],
+        "next_day": true,
+        "description": "夜盘交易时段，对应次日交易",
+        "market_condition": "低流动性，高波动性",
+        "suitable_for": ["日内短线", "突破交易"],
+        "position_limit": 0.5,
+        "commission_multiplier": 1.2
+      },
+      "pre_market": {
+        "name": "盘前",
+        "time_range": ["04:00", "09:30"],
+        "description": "盘前交易时段",
+        "market_condition": "中等流动性，反应隔夜消息",
+        "suitable_for": ["消息反应交易", "gap fill"],
+        "position_limit": 0.7,
+        "commission_multiplier": 1.1
+      },
+      "regular": {
+        "name": "盘中",
+        "time_range": ["09:30", "16:00"],
+        "description": "常规交易时段",
+        "market_condition": "高流动性，正常波动",
+        "suitable_for": ["趋势交易", "均值回归", "所有策略"],
+        "position_limit": 1.0,
+        "commission_multiplier": 1.0
+      },
+      "after_hours": {
+        "name": "盘后",
+        "time_range": ["16:00", "20:00"],
+        "description": "盘后交易时段",
+        "market_condition": "中等流动性，反应财报/新闻",
+        "suitable_for": ["财报交易", "新闻反应"],
+        "position_limit": 0.6,
+        "commission_multiplier": 1.15
+      }
+    }
+  },
+
+  "market_holidays": {
+    "description": "美股休市日（美国东部时间）",
+    "holidays": [
+      "2026-01-01",  // 新年
+      "2026-01-19",  // 马丁·路德·金日
+      "2026-02-16",  // 总统日
+      "2026-03-28",  // 耶稣受难日
+      "2026-05-25",  // 阵亡将士纪念日
+      "2026-06-19",  // 六月节
+      "2026-07-04",  // 独立日
+      "2026-09-07",  // 劳动节
+      "2026-11-26",  // 感恩节
+      "2026-12-25"   // 圣诞节
+    ],
+    "early_close_days": [
+      "2026-07-03",  // 独立日前一天
+      "2026-11-27",  // 感恩节后一天
+      "2026-12-24"   // 圣诞前夜
+    ]
+  },
+
+  "scanning_schedule": {
+    "description": "市场扫描时间表",
+    "scans": [
+      {
+        "time": "22:05",
+        "name": "夜盘开盘扫描",
+        "frequency": "每小时",
+        "purpose": "夜盘开盘波动性扫描"
+      },
+      {
+        "time": "04:05",
+        "name": "盘前开盘扫描",
+        "frequency": "每30分钟",
+        "purpose": "盘前重要消息反应"
+      },
+      {
+        "time": "09:35",
+        "name": "盘中开盘扫描",
+        "frequency": "每15分钟",
+        "purpose": "开盘30分钟关键期"
+      },
+      {
+        "time": "12:00",
+        "name": "午间扫描",
+        "frequency": "每小时",
+        "purpose": "午间流动性扫描"
+      },
+      {
+        "time": "15:30",
+        "name": "收盘前扫描",
+        "frequency": "每10分钟",
+        "purpose": "收盘前机会捕捉"
+      },
+      {
+        "time": "16:05",
+        "name": "盘后开盘扫描",
+        "frequency": "每30分钟",
+        "purpose": "盘后财报/新闻反应"
+      },
+      {
+        "time": "18:00",
+        "name": "盘后尾盘扫描",
+        "frequency": "每小时",
+        "purpose": "盘后结束前检查"
+      }
+    ]
+  },
+
+  "strategy_adjustments": {
+    "description": "不同时段的策略调整",
+    "overnight": {
+      "risk_multiplier": 0.8,
+      "position_size": 0.6,
+      "stop_loss": 0.04,
+      "take_profit": 0.08,
+      "preferred_indicators": ["ATR", "Volume", "VWAP"],
+      "avoid_strategies": ["Mean Reversion", "High Frequency"]
+    },
+    "pre_market": {
+      "risk_multiplier": 0.9,
+      "position_size": 0.8,
+      "stop_loss": 0.03,
+      "take_profit": 0.06,
+      "preferred_indicators": ["Gap", "Pre-market Volume", "News Sentiment"],
+      "avoid_strategies": ["Trend Following"]
+    },
+    "regular": {
+      "risk_multiplier": 1.0,
+      "position_size": 1.0,
+      "stop_loss": 0.02,
+      "take_profit": 0.04,
+      "preferred_indicators": ["All Technical Indicators", "Market Breadth"],
+      "avoid_strategies": []
+    },
+    "after_hours": {
+      "risk_multiplier": 0.7,
+      "position_size": 0.5,
+      "stop_loss": 0.05,
+      "take_profit": 0.10,
+      "preferred_indicators": ["Earnings Reaction", "News Impact", "Volume Spike"],
+      "avoid_strategies": ["Technical Analysis", "Swing Trading"]
+    }
+  },
+
+  "data_feed_config": {
+    "description": "不同时段的数据源配置",
+    "overnight": {
+      "primary_data": "Futu OpenD (real-time)",
+      "secondary_data": "Yahoo Finance (delayed)",
+      "news_sources": ["Reuters Night", "Asian Markets"],
+      "update_frequency": "1 minute"
+    },
+    "pre_market": {
+      "primary_data": "Futu OpenD (real-time)",
+      "secondary_data": "AlphaVantage",
+      "news_sources": ["SEC EDGAR", "CNBC Pre-market", "Bloomberg Early"],
+      "update_frequency": "30 seconds"
+    },
+    "regular": {
+      "primary_data": "Futu OpenD (real-time)",
+      "secondary_data": "Tushare + Yahoo Finance",
+      "news_sources": ["All Sources", "Real-time News"],
+      "update_frequency": "15 seconds"
+    },
+    "after_hours": {
+      "primary_data": "Futu OpenD (real-time)",
+      "secondary_data": "After-hours Data",
+      "news_sources": ["Earnings Reports", "Company News", "SEC Filings"],
+      "update_frequency": "1 minute"
+    }
+  },
+
+  "execution_rules": {
+    "description": "交易执行规则",
+    "limit_orders": {
+      "overnight": {
+        "slippage": 0.02,
+        "fill_probability": 0.3,
+        "timeout": 300
+      },
+      "pre_market": {
+        "slippage": 0.015,
+        "fill_probability": 0.5,
+        "timeout": 180
+      },
+      "regular": {
+        "slippage": 0.005,
+        "fill_probability": 0.9,
+        "timeout": 60
+      },
+      "after_hours": {
+        "slippage": 0.02,
+        "fill_probability": 0.4,
+        "timeout": 240
+      }
+    },
+    "market_orders": {
+      "warning": "仅在流动性充足时使用",
+      "allowed_sessions": ["regular", "pre_market"],
+      "max_size": 100
+    }
+  },
+
+  "monitoring_alerts": {
+    "description": "监控和警报",
+    "liquidity_alerts": {
+      "threshold": 10000,
+      "sessions": ["overnight", "after_hours"]
+    },
+    "volatility_alerts": {
+      "threshold": 0.05,
+      "sessions": ["overnight", "pre_market"]
+    },
+    "news_alerts": {
+      "sources": ["SEC EDGAR", "Earnings", "Major News"],
+      "all_sessions": true
+    }
+  },
+
+  "implementation_status": {
+    "overnight": "待测试",
+    "pre_market": "已实现",
+    "regular": "已实现",
+    "after_hours": "已实现",
+    "news_integration": "已实现",
+    "auto_scheduling": "已实现"
+  }
+}

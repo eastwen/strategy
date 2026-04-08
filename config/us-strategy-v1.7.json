@@ -1,0 +1,162 @@
+{
+  "version": "1.7",
+  "strategy_name": "美股四源共振策略 v1.7",
+  "description": "美股交易策略 v1.6 - 已整合新闻系统+LLM分析",
+  "last_updated": "2026-04-02",
+  "four_sources": {
+    "international_news": {
+      "name": "国际资讯",
+      "sources": [
+        "Bloomberg",
+        "Reuters",
+        "Finnhub"
+      ],
+      "weight": 0.35,
+      "integration": "news_pipeline.py"
+    },
+    "regulatory_announcements": {
+      "name": "监管公告",
+      "sources": [
+        "SEC EDGAR"
+      ],
+      "weight": 0.2,
+      "integration": "news_pipeline.py"
+    },
+    "domestic_community": {
+      "name": "国内社区",
+      "sources": [
+        "财联社",
+        "雪球",
+        "新浪财经"
+      ],
+      "weight": 0.25,
+      "integration": "simple_chinese_news.py"
+    },
+    "overseas_social": {
+      "name": "海外社交",
+      "sources": [
+        "Twitter/X",
+        "Reddit"
+      ],
+      "weight": 0.2
+    }
+  },
+  "llm_analysis": {
+    "enabled": true,
+    "model": "deepseek-r1",
+    "min_base_score_for_llm": 70,
+    "min_final_score": 65,
+    "description": "扫描后TOP50候选股票进行LLM分析，基础评分≥70才分析，最终评分≥65才考虑入场",
+    "adjustment_range": 10,
+    "positive_bonus": "+5分（技术面强劲+新闻正面）",
+    "negative_penalty": "-5分（技术面疲弱+新闻负面）"
+  },
+  "sentiment_monitoring": {
+    "vix_fear_index": {
+      "code": "US.VIX",
+      "weight": 0.3,
+      "thresholds": {
+        "extreme_fear": 30,
+        "fear": 25,
+        "normal": 20,
+        "calm": 15
+      }
+    },
+    "cnn_fear_greed": {
+      "source": "CNN API",
+      "weight": 0.25,
+      "thresholds": {
+        "extreme_fear": 25,
+        "fear": 45,
+        "neutral": 55,
+        "greed": 75,
+        "extreme_greed": 100
+      }
+    },
+    "option_ratio": {
+      "source": "get_option_chain",
+      "weight": 0.25,
+      "thresholds": {
+        "bullish": 1.2,
+        "neutral": 1.0,
+        "bearish": 0.8
+      }
+    },
+    "news_sentiment": {
+      "source": "news_integration.py",
+      "weight": 0.2
+    }
+  },
+  "trading_conditions": {
+    "entry_conditions": [
+      "趋势向上: MA20 > MA50，价格 > MA20",
+      "技术信号≥2 或 信号≥1+强背离",
+      "成交量放大 ≥ 1.8x",
+      "RSI < 65",
+      "LLM最终评分 ≥ 65分"
+    ],
+    "exit_conditions": [
+      "ATR动态止损（1.8-2.0x）",
+      "ATR动态止盈（4.0-4.5x）",
+      "RSI超买离场（>70）",
+      "MACD死叉离场",
+      "最大持仓6天"
+    ],
+    "position_size": 0.12,
+    "max_position_pct": 0.05
+  },
+  "news_integration": {
+    "description": "新闻与交易策略深度整合",
+    "pipeline": "news_integration.py",
+    "database": "./data/news/news.db",
+    "adjustment_range": 15,
+    "adjustment_formula": "评分调整 = (新闻影响分数 - 0.5) × 15",
+    "weight_in_strategy": 0.2
+  },
+  "trading_sessions": {
+    "overnight": {
+      "enabled": false,
+      "time_range": ["22:00", "04:00"],
+      "position_limit": 0.5,
+      "risk_multiplier": 0.8
+    },
+    "pre_market": {
+      "enabled": false,
+      "time_range": ["04:00", "09:30"],
+      "position_limit": 0.7,
+      "risk_multiplier": 0.9
+    },
+    "regular_session": {
+      "enabled": true,
+      "time_range": ["21:00", "04:00"],
+      "position_limit": 1.0,
+      "risk_multiplier": 1.0
+    },
+    "after_hours": {
+      "enabled": false,
+      "time_range": ["04:00", "08:00"],
+      "position_limit": 0.6,
+      "risk_multiplier": 0.7
+    }
+  },
+  "risk_management": {
+    "daily_loss_limit": 0.02,
+    "weekly_loss_limit": 0.05,
+    "position_correlation_limit": 0.7,
+    "sector_exposure_limit": 0.3
+  },
+  "implementation_status": {
+    "news_pipeline": "已完成",
+    "trading_sessions": "已配置",
+    "sentiment_monitor": "部分实现",
+    "scanning_system": "已实现",
+    "risk_management": "已实现",
+    "news_integration": "已完成",
+    "llm_analysis": "已完成"
+  },
+  "next_steps": [
+    "完善已平仓交易统计",
+    "优化RSI阈值",
+    "调整止盈止损比例"
+  ]
+}

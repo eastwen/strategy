@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-04-08T17:00:05.421496",
+  "proposals": [
+    {
+      "type": "param",
+      "issue": "RSI下限(20)可能偏低",
+      "suggestion": "建议提高到40，避免超卖陷阱；或降低到30捕捉超跌反弹",
+      "priority": "中",
+      "id": "HK001",
+      "category": "参数优化"
+    },
+    {
+      "type": "param",
+      "issue": "RSI上限(80)可能偏高",
+      "suggestion": "建议降低到65，避免追高",
+      "priority": "中",
+      "id": "HK002",
+      "category": "参数优化"
+    }
+  ]
+}

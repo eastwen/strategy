@@ -1,0 +1,276 @@
+{
+  "time": "2026-04-09T01:59:13.229983",
+  "source": "news_integration",
+  "alerts": [
+    {
+      "symbol": "",
+      "title": "Jeff Shell leaves Paramount after allegations of SEC violations; company calls claims 'baseless'",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:33:06",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Israel pounds Lebanon with heaviest airstrikes of war as Hezbollah pauses attacks - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T00:53:40",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "The 'madman theory' of US-Iran negotiations: Ross Kerber - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T00:26:40",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "STOXX 600 logs best day in a year as Iran truce fuels relief rally - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T00:20:14",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Jim Cramer: Massive stock rebound underscores one of my key investing principles",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T00:15:04",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Wall Street jumps to near one-month highs after US-Iran ceasefire - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T00:04:17",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Trump announces 50% tariffs on nations supplying Iran with weapons - Reuters",
+      "source": "Finnhub",
+      "sentiment": 1.0,
+      "timestamp": "2026-04-08T23:52:02",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "The new Trump trades: how investors are navigating Iran shocks - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:39:04",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Trump meets NATO chief as Iran war strains alliance - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:38:50",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Exxon signals lower Q1 profit despite higher oil, gas revenue from Iran war price spikes - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:35:56",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "US military says it's ready to resume Iran fighting if diplomacy fails - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:32:03",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "We're trimming our stake in an AI winner to take advantage of great prices",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:31:24",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "We're exiting our position in a drug stock and initiating a stake in a more attractive rival",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:18:48",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Global energy stocks plunge as US-Iran ceasefire hits oil - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:08:39",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Shippers seek clarity on Hormuz reopening after US-Iran ceasefire deal - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T23:08:36",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Trump says US will work closely with Iran, discuss sanctions - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T22:59:49",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Iran struck Saudi Arabia oil pipeline just hours after ceasefire, source says - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T22:35:22",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "The U.S. housing markets where million-dollar listings are standard",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T22:10:01",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Iran war ceasefire pushes energy markets into twilight zone - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T22:09:48",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Iran's shattered economy means any success in war may be fleeting - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-08T21:43:03",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "3 Reasons SABR is Risky and 1 Stock to Buy Instead",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245361",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Stock Market Today: Dow Surges 1,200 Points On Ceasefire; This Data Center Name Breaks Out (Live Coverage)",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-04-09T01:59:02.245400",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Why D-Wave Quantum Stock Plummeted 23.2% Last Month and Has Inched Lower in April",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245424",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "The Best Trillion-Dollar Stock to Buy Right Now, According to Wall Street",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245439",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Stock Market Rebound: 3 Top AI Bargains to Snap Up Now",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-04-09T01:59:02.245453",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Why e.l.f. Beauty Stock Plummeted 34.2% Last Month But Is Gaining in April",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-04-09T01:59:02.245471",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "US Equity Indexes Surge, Crude Oil Plummets as Iran Ceasefire Deal Eases Geopolitical Risk",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-04-09T01:59:02.245491",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Stocks Rally on Cease-Fire Deal. Will It Last?",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245514",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "U.S stocks rally, oil prices tumble after Iran ceasefire",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245532",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Why Applied Digital Stock Jumped Today",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-04-09T01:59:02.245552",
+      "importance": "中",
+      "alert_type": "新闻"
+    }
+  ]
+}

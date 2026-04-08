@@ -1,0 +1,121 @@
+# Strategy Cron Tasks - 策略定时任务配置
+# 更新时间：2026-03-25
+# 位置：/home/admin/.openclaw/workspace-stock/strategy/cron-tasks.txt
+
+## 📅 当前配置的cron任务
+
+### 1. 港股日报生成
+```bash
+# 周一至周五 16:10（港股收盘后）
+10 16 * * 1-5 cd /home/admin/.openclaw/workspace-stock/strategy && python3 comprehensive-report-v12.py >> ../logs/report-hk.log 2>&1
+```
+
+### 2. 美股日报生成
+```bash
+# 周二至周六 04:30（美股收盘后）
+30 4 * * 2-6 cd /home/admin/.openclaw/workspace-stock/strategy && python3 comprehensive-report-v12.py --us >> ../logs/report-us.log 2>&1
+```
+
+### 3. 周报生成
+```bash
+# 周六 15:00
+0 15 * * 6 cd /home/admin/.openclaw/workspace-stock/strategy && python3 generate-weekly-report.py >> ../logs/weekly.log 2>&1
+```
+
+### 4. 月报生成
+```bash
+# 每月最后一天 16:10
+10 16 28-31 * * [ $(date +\%d -d tomorrow) = 01 ] && cd /home/admin/.openclaw/workspace-stock/strategy && python3 generate-monthly-report.py >> ../logs/monthly.log 2>&1
+```
+
+### 5. 富途数据同步 ⭐重要
+```bash
+# 每2小时同步一次
+0 */2 * * * cd /home/admin/.openclaw/workspace-stock/strategy && python3 sync-futu-account.py >> ../logs/sync.log 2>&1
+```
+
+### 6. 新闻整合更新
+```bash
+# 每小时30分更新交易机会评分
+30 * * * * cd /home/admin/.openclaw/workspace-stock/strategy && python3 news_integration.py --update >> ../logs/news_integration.log 2>&1
+```
+
+### 7. 国内新闻获取
+```bash
+# 每6小时获取国内新闻
+0 */6 * * * cd /home/admin/.openclaw/workspace-stock/strategy && python3 simple_chinese_news.py >> ../logs/news_cn.log 2>&1
+```
+
+### 8. 国际新闻管道
+```bash
+# 每6小时获取国际新闻（比国内晚30分钟）
+30 */6 * * * cd /home/admin/.openclaw/workspace-stock/strategy && python3 news_pipeline.py >> ../logs/news_intl.log 2>&1
+```
+
+## 🚀 心跳检查系统
+
+### 9. 策略心跳检查（每5分钟）
+```bash
+# 每5分钟检查一次策略状态
+*/5 * * * * cd /home/admin/.openclaw/workspace-stock && source futu-venv/bin/activate && cd strategy && python3 heartbeat-check.py >> ../logs/heartbeat.log 2>&1 && deactivate
+```
+
+### 10. 心跳检查逻辑
+- **静默模式**：正常状态不输出日志，减少日志量
+- **问题触发**：发现问题时输出详细日志
+- **机会提醒**：高评分机会≥8个时输出提醒
+- **飞书通知**：发现严重问题时发送通知（待实现）
+
+### 11. 扫描器任务（建议添加）
+```bash
+# 港股扫描 - 每天开盘前
+0 9 * * 1-5 cd /home/admin/.openclaw/workspace-stock && source futu-venv/bin/activate && cd strategy && python3 hk-scanner.py >> ../logs/hk-scan.log 2>&1 && deactivate
+
+# 美股扫描 - 每天开盘前
+0 20 * * 1-5 cd /home/admin/.openclaw/workspace-stock && source futu-venv/bin/activate && cd strategy && python3 us-scanner.py >> ../logs/us-scan.log 2>&1 && deactivate
+```
+
+## 📊 日志文件位置
+所有日志输出到：`/home/admin/.openclaw/workspace-stock/logs/`
+```
+logs/
+├── report-hk.log          # 港股日报
+├── report-us.log          # 美股日报
+├── weekly.log            # 周报
+├── monthly.log           # 月报
+├── sync.log              # 数据同步
+├── news_integration.log  # 新闻整合
+├── news_cn.log           # 国内新闻
+└── news_intl.log         # 国际新闻
+```
+
+## 🔧 管理命令
+
+### 查看当前cron任务
+```bash
+crontab -l | grep -i "openclaw\|strategy"
+```
+
+### 编辑cron任务
+```bash
+crontab -e
+```
+
+### 测试特定任务
+```bash
+# 测试数据同步
+cd /home/admin/.openclaw/workspace-stock/strategy && python3 sync-futu-account.py
+
+# 测试新闻整合
+cd /home/admin/.openclaw/workspace-stock/strategy && python3 news_integration.py --update
+```
+
+## 📝 备注
+1. 所有任务在 `strategy/` 目录下执行
+2. 使用相对路径确保可移植性
+3. 日志文件自动轮转（需要配置logrotate）
+4. 心跳通知通过OpenClaw cron独立管理
+
+---
+*配置版本：v1.0*
+*最后同步：系统crontab与文档一致*

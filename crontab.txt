@@ -1,0 +1,29 @@
+# 港股扫描 - 交易时段每5分钟
+*/5 9-12,13-16 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/hk-scanner.py >> /home/admin/.openclaw/workspace-stock/logs/hk-scanner.log 2>&1
+
+# 港股日报 - 收盘后 (16:10) - 生成报告并上传到飞书Wiki，发链接到群聊
+10 16 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/daily-report-to-feishu.py >> /home/admin/.openclaw/workspace-stock/logs/hk-daily.log 2>&1
+
+# 港股优化 - 收盘后 (17:00)
+0 17 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/hk-optimizer.py >> /home/admin/.openclaw/workspace-stock/logs/hk-optimizer.log 2>&1
+
+# 美股扫描 - 盘前盘后每15分钟
+*/15 21-23,0-5 * * 2-6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/us-scanner.py >> /home/admin/.openclaw/workspace-stock/logs/us-scanner.log 2>&1
+
+# 美股日报 - 周二到周六凌晨 (04:30)
+30 4 * * 2-6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/daily-report-to-feishu.py --us >> /home/admin/.openclaw/workspace-stock/logs/us-daily.log 2>&1
+
+# 美股优化 - 周二到周六凌晨
+0 5 * * 2-6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/us-optimizer.py >> /home/admin/.openclaw/workspace-stock/logs/us-optimizer.log 2>&1
+
+# 自动交易 - 港股交易时段每15分钟
+*/15 9-12,13-16 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/auto-trader.py >> /home/admin/.openclaw/workspace-stock/logs/auto-trader.log 2>&1
+
+# 账户同步 - 每30分钟
+*/10 * * * * /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/sync-futu-account.py >> /home/admin/.openclaw/workspace-stock/logs/sync.log 2>&1
+
+# 新闻资讯 - 每5分钟
+# 新闻资讯 - 通过主会话的心跳检查来运行，不需要单独cron
+
+# 周报生成 - 周六下午
+0 15 * * 6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/weekly-report.py >> /home/admin/.openclaw/workspace-stock/logs/weekly.log 2>&1
