@@ -229,21 +229,12 @@ class AutoTrader:
         try:
             self.quote_ctx = OpenQuoteContext('127.0.0.1', 11111)
             
+            # 模拟盘不需要解锁，直接创建交易上下文
             # 美股交易上下文
             self.trade_ctx = OpenUSTradeContext('127.0.0.1', 11111)
-            ret, data = self.trade_ctx.unlock_trade(password='709394')  # 模拟盘交易密码
-            if ret != RET_OK:
-                print(f"⚠️ 美股解锁交易失败: {data}")
-            else:
-                print("✅ 美股解锁交易成功")
             
             # 港股交易上下文
             self.hk_trade_ctx = OpenHKTradeContext('127.0.0.1', 11111)
-            ret, data = self.hk_trade_ctx.unlock_trade(password='709394')  # 模拟盘交易密码
-            if ret != RET_OK:
-                print(f"⚠️ 港股解锁交易失败: {data}")
-            else:
-                print("✅ 港股解锁交易成功")
             
             print("✅ 连接Futu OpenD成功")
             return True
@@ -468,19 +459,28 @@ class AutoTrader:
         # 止损交易跳过LLM分析
         if not skip_llm:
             llm_analysis = self.llm_analysis_before_trade(symbol, price, market)
-            if llm_analysis:
-                final_score = llm_analysis.get('final_score', 0)
-                llm_reason = llm_analysis.get('llm_reason', '')
-                
-                print(f"\n🧠 LLM分析结果:")
-                print(f"   评分调整: {llm_analysis.get('score_adjust', 0):+d}")
-                print(f"   最终评分: {final_score}")
-                print(f"   LLM理由: {llm_reason}")
-                
-                # 如果LLM建议不买入，则取消
-                if final_score < 65:
-                    print(f"❌ LLM分析不建议买入（评分: {final_score}），取消下单")
-                    return False
+            
+            # LLM分析失败或被阻止
+            if not llm_analysis:
+                print(f"❌ LLM分析不可用，禁止下单")
+                return False
+            
+            if not llm_analysis.get('passed', True):
+                print(f"❌ LLM分析失败，禁止下单: {llm_analysis.get('llm_reason', '未知错误')}")
+                return False
+            
+            final_score = llm_analysis.get('final_score', 0)
+            llm_reason = llm_analysis.get('llm_reason', '')
+            
+            print(f"\n🧠 LLM分析结果:")
+            print(f"   评分调整: {llm_analysis.get('score_adjust', 0):+d}")
+            print(f"   最终评分: {final_score}")
+            print(f"   LLM理由: {llm_reason}")
+            
+            # 如果LLM建议不买入，则取消
+            if final_score < 65:
+                print(f"❌ LLM分析不建议买入（评分: {final_score}），取消下单")
+                return False
         
         # 连接Futu
         if not self.trade_ctx:
@@ -837,6 +837,11 @@ class AutoTrader:
                 price = o.get('price', 0)
                 score = o.get('score', 0)
                 
+                # 检查扫描器中LLM是否未通过
+                if not o.get('llm_passed', True):
+                    print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
+                    continue
+                
                 futu_symbol = f"US.{symbol}"
                 should, reason = self.should_trade(futu_symbol, us_account['positions'], us_account.get('pending_orders', []))
                 
@@ -889,6 +894,11 @@ class AutoTrader:
                 symbol = o.get('symbol', '')
                 price = o.get('price', 0)
                 score = o.get('base_score', 0)
+                
+                # 检查扫描器中LLM是否未通过
+                if not o.get('llm_passed', True):
+                    print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
+                    continue
                 
                 should, reason = self.should_trade(symbol, hk_account['positions'], hk_account.get('pending_orders', []))
                 
@@ -977,9 +987,9 @@ class AutoTrader:
             return result
             
         except Exception as e:
-            print(f"⚠️ LLM分析失败: {e}")
-            # LLM分析失败时，不阻止交易
-            return None
+            print(f"❌ LLM分析失败: {e}")
+            # LLM分析失败时，必须阻止交易
+            return {'final_score': 0, 'llm_reason': f'LLM分析失败: {e}', 'passed': False}
     
     def send_notification(self, message):
         """发送通知到飞书"""
@@ -1175,7 +1185,7 @@ if __name__ == '__main__':
                         raw_quantity = int(position_value / price) if price > 0 else 0
                         
                         # 港股需要整手交易，根据股票代码获取每手股数
-                        lot_size = self._get_hk_lot_size(symbol)
+                        lot_size = trader._get_hk_lot_size(symbol)
                         quantity = (raw_quantity // lot_size) * lot_size  # 向下取整到整手
                         
                         print(f"[{now}] 📊 仓位计算: ${position_value:,.2f} / {price} = {raw_quantity}股 -> 调整为{quantity}股(每手{lot_size})")

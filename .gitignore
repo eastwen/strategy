@@ -1,45 +1,30 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
+# 敏感数据和配置
+data/
+logs/
+.env
+*.key
+*.pem
+api_keys.py
+config/*secret*.json
+config/*private*.json
 
 # 虚拟环境
 futu-venv/
 venv/
-.venv/
-
-# 日志文件
-logs/*.log
-
-# 数据库文件（太大）
-data/news/news.db
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
 # 临时文件
 *.tmp
+*.log
 *.swp
-*.swo
-*~
-
-# 系统文件
 .DS_Store
-Thumbs.db
-
-# IDE
 .vscode/
 .idea/
-*.sublime-*
 
-# 敏感信息
-strategy/.api-keys.json
-.api-keys.json
-
-# 测试文件
-test_*.py
-*_test.py
+# 日报和报告
+daily-reports/*.md
+weekly-reports/*.md
+monthly-reports/*.md

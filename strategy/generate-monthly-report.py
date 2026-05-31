@@ -32,7 +32,7 @@ class MonthlyReportV2:
         self.finnhub_key = keys['finnhub']['api_key']
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_chat_id = keys['feishu'].get('chatId', '') or keys['feishu']['openId']
+        self.feishu_chat_id = keys['feishu'].get('chatId', '') or keys['feishu'].get('openId', 'oc_f6c5168cb212e624d21ccfabed49b083')
     
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -128,6 +128,55 @@ class MonthlyReportV2:
         # 统计机会
         hk_high = [s for s in self.hk_signals if s.get('base_score', 0) >= 70]
         us_high = [s for s in self.us_signals if s.get('score', 0) >= 70]
+        
+        # LLM分析
+        import sys
+        sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+        from llm_stock_analyzer import get_llm_client
+        llm_client = get_llm_client()
+        
+        llm_risk = llm_client.get_risk_assessment({
+            'pos_pct': position_pct, 'cash_pct': cash_pct,
+            'vix': 20, 'vhsi': 20,
+            'total_asset': total_asset,
+            'positions': [{'symbol': p['symbol'], 'pnl_pct': p.get('pnl_pct', 0)} for p in self.positions],
+            'initial': initial
+        })
+        
+        risk_section = ""
+        if llm_risk:
+            for line in llm_risk.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    level_ = parts[0].strip()
+                    rtype_ = parts[1].strip()
+                    desc_ = parts[2].strip()
+                    act_ = parts[3].strip()
+                    risk_section += f"• {level_} **{rtype_}**: {desc_} → {act_}\n\n"
+        if not risk_section:
+            risk_section = "• ⚠️ 持续监控VIX/VHSI波动\n\n• ⚠️ 严格执行止损纪律\n\n"
+        
+        # LLM下月策略建议
+        llm_strategy = llm_client.call(
+            "你是专业投资顾问。根据以下月度数据给出下月3条策略建议。\n"
+            f"本月收益率: {total_pnl_pct:+.2f}%\n持仓占比: {position_pct:.1f}%\n现金占比: {cash_pct:.1f}%\n"
+            "每条格式: 建议类型|具体建议。直接回复3行。",
+            max_tokens=200, temperature=0.3
+        )
+        strategy_section = ""
+        if llm_strategy:
+            for line in llm_strategy.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|', 1)
+                if len(parts) >= 2:
+                    strategy_section += f"• 📌 **{parts[0].strip()}**: {parts[1].strip()}\n\n"
+        if not strategy_section:
+            strategy_section = "• 📌 维持当前策略，关注信号质量\n\n" 
         
         # 生成报告
         report = f"""# 📊 每月交易报告
@@ -265,15 +314,7 @@ class MonthlyReportV2:
 
 ## 💡 六、下月策略调整建议
 
-### 行业权重（港股）
-| 行业 | 当前权重 | 建议 |
-|------|----------|------|
-| 新能源汽车 | 2.00 | 维持 |
-| 消费 | 1.85 | 维持 |
-| 医药 | 0.81 | 观察 |
-| 金融 | 0.22 | 不推荐 |
-| 互联网科技 | 0.20 | 不推荐 |
-
+{strategy_section}
 ### 风险控制
 - 止损线：-6%
 - 止盈线：ATR 4.0x / +15%
@@ -284,10 +325,7 @@ class MonthlyReportV2:
 
 ## ⚠️ 七、风险提示
 
-- ⚠️ 持续监控VIX/VHSI波动
-- ⚠️ 关注财报披露时间
-- ⚠️ 严格执行止损纪律
-- ⚠️ 控制仓位，避免集中
+{risk_section}
 
 ---
 

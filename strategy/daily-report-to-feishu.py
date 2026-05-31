@@ -9,6 +9,7 @@
 import sys
 import os
 import json
+import re
 import requests
 from datetime import datetime
 
@@ -79,12 +80,38 @@ class ComprehensiveReportV11:
     def __init__(self, us_mode=False):
         self.us_mode = us_mode
     
+    @property
+    def llm(self):
+        """惰性加载LLM客户端"""
+        if not hasattr(self, '_llm_client') or self._llm_client is None:
+            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            from llm_stock_analyzer import get_llm_client
+            self._llm_client = get_llm_client()
+        return self._llm_client
+
     def get_today_trades(self, market='us'):
         """获取当天的开仓/平仓记录"""
         from datetime import datetime, timedelta
         
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_str = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now()
+        today_str = today.strftime('%Y-%m-%d')
+        
+        def is_today(timestamp):
+            """检查时间戳是否是今天（支持多种格式）"""
+            if not timestamp:
+                return False
+            # 提取日期部分，支持格式：2026-05-31, 2026-05-31T..., 2026-05-31 等
+            try:
+                # 先尝试提取前10个字符（日期部分）
+                date_part = timestamp[:10]
+                if date_part == today_str:
+                    return True
+                # 尝试解析ISO格式
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                return dt.date() == today.date()
+            except:
+                # 最后回退到startswith
+                return timestamp.startswith(today_str)
         
         # 读取开仓记录
         open_positions = []
@@ -94,7 +121,7 @@ class ComprehensiveReportV11:
                 # 筛选当天的开仓
                 for pos in all_positions:
                     entry_time = pos.get('entry_time', '')
-                    if entry_time.startswith(today_str):
+                    if is_today(entry_time):
                         # 根据市场筛选
                         pos_market = pos.get('market', 'us')
                         if (market == 'us' and pos_market == 'us') or (market == 'hk' and pos_market == 'hk'):
@@ -110,7 +137,7 @@ class ComprehensiveReportV11:
                 # 筛选当天的平仓
                 for trade in all_trades:
                     close_time = trade.get('close_time', '')
-                    if close_time.startswith(today_str):
+                    if is_today(close_time):
                         # 根据市场筛选
                         trade_market = trade.get('market', 'us')
                         if (market == 'us' and trade_market == 'us') or (market == 'hk' and trade_market == 'hk'):
@@ -142,12 +169,18 @@ class ComprehensiveReportV11:
         统计当前持仓的盈亏情况，按策略版本分组
         """
         # 筛选持仓
+        def is_hk_symbol(sym):
+            s = str(sym).replace('HK.', '').replace('US.', '')
+            return s.isdigit() or s.startswith('0')
+        def is_us_symbol(sym):
+            s = str(sym).replace('HK.', '').replace('US.', '')
+            return not s.isdigit() and not s.startswith('0') and not s.startswith('0')
         if market == 'hk':
-            positions = [p for acc_id, poss in self.positions_by_account.items() 
-                        for p in poss if acc_id == 15270899 or 'HK' in str(p.get('symbol', ''))]
+            positions = [p for poss in self.positions_by_account.values() 
+                        for p in poss if is_hk_symbol(p.get('symbol', ''))]
         else:
-            positions = [p for acc_id, poss in self.positions_by_account.items() 
-                        for p in poss if acc_id == 15270898 and 'HK' not in str(p.get('symbol', ''))]
+            positions = [p for poss in self.positions_by_account.values() 
+                        for p in poss if is_us_symbol(p.get('symbol', ''))]
         
         if not positions:
             return None
@@ -213,7 +246,7 @@ class ComprehensiveReportV11:
         # 飞书
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_open_id = keys['feishu']['openId']
+        self.feishu_open_id = keys['feishu'].get('openId', '')
         self.feishu_token = None
     
     def get_feishu_token(self):
@@ -414,89 +447,6 @@ class ComprehensiveReportV11:
             print(f"⚠️ 获取市场新闻失败: {e}")
         
         return news_list
-
-    def get_market_prediction(self, market='hk'):
-        """使用LLM生成未来3日市场预判"""
-        try:
-            import requests
-            import json
-            import re
-            
-            # 加载API Key
-            config_path = '/home/admin/.openclaw/openclaw.json'
-            with open(config_path, 'r') as f:
-                content = f.read()
-                # 移除尾随逗号
-                content = re.sub(r',\s*([}\]])', r'\1', content)
-                config = json.loads(content)
-            
-            api_key = config.get('env', {}).get('MODELSTUDIO_API_KEY', '')
-            
-            if not api_key:
-                return None
-            
-            # 构建提示词
-            market_name = '港股' if market == 'hk' else '美股'
-            vix_val = self.hk_vhsi if market == 'hk' else self.us_vix
-            
-            prompt = f"""你是专业的{market_name}市场分析师。请根据以下数据预测未来3个交易日的市场走势。
-
-当前市场数据：
-- 恐慌指数(VIX/VHSI): {vix_val:.1f}
-- 市场情绪: {'恐慌' if vix_val > 25 else '正常' if vix_val > 20 else '平静'}
-
-请给出未来3个交易日的预测，格式如下：
-T+1日|情绪预判|概率|市场走势
-T+2日|情绪预判|概率|市场走势
-T+3日|情绪预判|概率|市场走势
-
-每行一个交易日，用|分隔。情绪预判用：乐观/中性偏多/中性/中性偏空/悲观。概率用百分比。市场走势用简短描述（不超过10字）。
-
-直接回复3行预测，不要其他内容。"""
-            
-            headers = {
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json'
-            }
-            
-            data = {
-                'model': 'qwen-coder-turbo-0919',
-                'messages': [{'role': 'user', 'content': prompt}],
-                'max_tokens': 200,
-                'temperature': 0.5
-            }
-            
-            resp = requests.post(
-                'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-                headers=headers,
-                json=data,
-                timeout=30
-            )
-            
-            if resp.status_code == 200:
-                result = resp.json()
-                content = result['choices'][0]['message']['content'].strip()
-                return self._parse_prediction(content)
-            
-        except Exception as e:
-            print(f"⚠️ LLM市场预测失败: {e}")
-        
-        return None
-    
-    def _parse_prediction(self, content):
-        """解析LLM返回的预测内容"""
-        predictions = []
-        for line in content.strip().split('\n'):
-            if '|' in line:
-                parts = line.split('|')
-                if len(parts) >= 4:
-                    predictions.append({
-                        'day': parts[0].strip(),
-                        'sentiment': parts[1].strip(),
-                        'probability': parts[2].strip(),
-                        'trend': parts[3].strip()
-                    })
-        return predictions if predictions else None
 
     def get_earnings_calendar(self, days=7):
         """获取未来N天的财报日历"""
@@ -984,7 +934,13 @@ T+3日|情绪预判|概率|市场走势
                 chg_pct = safe_float(data.get('change_pct'))
                 trend = "上涨" if chg_pct >= 0 else "下跌"
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
-        report += f"\n**VHSI波幅指数**: {self.hk_vhsi:.1f}  |  🟠 恐慌区间\n\n"
+        
+        # LLM解读港股走势
+        hk_analysis = self.llm.get_market_analysis('hk', hk_index_data, self.hk_vhsi)
+        if hk_analysis:
+            report += f"\n> {hk_analysis}\n\n"
+        else:
+            report += f"\n**VHSI波幅指数**: {self.hk_vhsi:.1f}\n\n"
         
         report += """### 🇺🇸 美股市场走势分析
 
@@ -995,15 +951,21 @@ T+3日|情绪预判|概率|市场走势
                 chg_pct = safe_float(data.get('change_pct'))
                 trend = "上涨" if chg_pct >= 0 else "下跌"
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
-        report += f"\n**VIX恐慌指数**: {self.us_vix:.1f}  |  🟡 正常区间\n\n"
+        
+        # LLM解读美股走势
+        us_analysis = self.llm.get_market_analysis('us', us_index_data, self.us_vix)
+        if us_analysis:
+            report += f"\n> {us_analysis}\n\n"
+        else:
+            report += f"\n**VIX恐慌指数**: {self.us_vix:.1f}\n\n"
         
         # 判断情绪状态
         hk_emotion = "🔴 极度恐慌" if self.hk_vhsi >= 30 else "🟠 恐慌" if self.hk_vhsi >= 25 else "🟡 正常" if self.hk_vhsi >= 20 else "🟢 平静"
         us_emotion = "🔴 极度恐慌" if self.us_vix >= 30 else "🟠 恐慌" if self.us_vix >= 25 else "🟡 正常" if self.us_vix >= 20 else "🟢 平静"
         
         # 获取LLM市场预测
-        hk_prediction = self.get_market_prediction('hk')
-        us_prediction = self.get_market_prediction('us')
+        hk_prediction = self.llm.get_market_prediction('hk', self.hk_vhsi, hk_index_data)
+        us_prediction = self.llm.get_market_prediction('us', self.us_vix, us_index_data)
         
         report += f"""
 ### 🇭🇰 港股市场情绪
@@ -1069,22 +1031,78 @@ T+3日|情绪预判|概率|市场走势
 
 """
 
-        report += f"""## ⚠️ 八、风险提示与操作建议
+        # ===== 第八部分：LLM动态风险分析与操作建议 =====
+        report += """## ⚠️ 八、风险提示与操作建议
 
-### 1. 系统性风险
-• 🔴 **高波动期**：VIX({self.us_vix:.1f})/VHSI({self.hk_vhsi:.1f})，建议控制仓位在30%以下
-
-### 2. 非系统性风险
-• ⚠️ **持仓集中度**：当前持仓占比{pos_pct:.1f}%
-
-### 3. 操作建议
-• 📉 **减仓建议**：建议减仓至30-40%
-• 📊 **止损设置**：单票止损-6%
-• ⏰ **持仓周期**：最长6天
-
----
+"""
+        # 准备市场数据供LLM分析
+        llm_market_data = {
+            'pos_pct': pos_pct,
+            'cash_pct': cash_pct,
+            'vix': self.us_vix,
+            'vhsi': self.hk_vhsi,
+            'total_asset': total_asset,
+            'total_pnl': total_pnl,
+            'positions': all_positions,
+            'initial': 2000000
+        }
+        
+        # LLM动态风险分析
+        report += "### 1. 风险评估\n\n"
+        risk_text = self.llm.get_risk_assessment(llm_market_data)
+        if risk_text:
+            # 解析格式：风险等级|风险类型|具体描述|建议动作
+            for line in risk_text.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    level = parts[0].strip()
+                    rtype = parts[1].strip()
+                    desc = parts[2].strip()
+                    action = parts[3].strip()
+                    report += f"• {level} **{rtype}风险**：{desc} → {action}\n\n"
+                elif len(parts) >= 2:
+                    report += f"• {line}\n\n"
+        else:
+            # Fallback：基于数据的简单风险提示
+            vix_level = "🔴高" if self.us_vix >= 25 else "🟠中" if self.us_vix >= 20 else "🟡低"
+            vhsi_level = "🔴高" if self.hk_vhsi >= 25 else "🟠中" if self.hk_vhsi >= 20 else "🟡低"
+            report += f"• {vix_level} **系统性风险**：VIX({self.us_vix:.1f})/VHSI({self.hk_vhsi:.1f})\n\n"
+            if pos_pct > 60:
+                report += f"• 🟠 **集中度风险**：持仓占比{pos_pct:.1f}%偏高\n\n"
+            elif pos_pct < 20:
+                report += f"• 🟡 **资金闲置**：持仓仅{pos_pct:.1f}%，现金占比{cash_pct:.1f}%\n\n"
+        
+        # LLM动态操作建议
+        report += "### 2. 操作建议\n\n"
+        action_text = self.llm.get_action_recommendations(llm_market_data)
+        if action_text:
+            for line in action_text.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 2:
+                    atype = parts[0].strip()
+                    advice = parts[1].strip()
+                    icon = '📊' if atype == '仓位管理' else '🎯' if atype == '止损止盈' else '💡' if atype == '开仓机会' else '🛡️'
+                    report += f"• {icon} **{atype}**：{advice}\n\n"
+                else:
+                    report += f"• {line}\n\n"
+        else:
+            # Fallback：基于数据的基础建议
+            if pos_pct > 60:
+                report += "• 📉 建议适当减仓，控制仓位在40-50%\n\n"
+            elif pos_pct < 20:
+                report += "• 💡 当前仓位较低，可关注市场机会择机建仓\n\n"
+            report += "• 📊 单票止损-6%，止盈+15%\n\n"
+        
+        report += f"""---
 
 ⏰ *报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}*
+*🧠 风险评估与操作建议由LLM动态生成*
 """
         return report
     
@@ -1116,10 +1134,20 @@ def create_feishu_doc(title, content):
 
 def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
     """发送消息到飞书群聊"""
+    # 从.api-keys.json读取凭据
+    try:
+        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
+            keys = json.load(f)
+        app_id = keys['feishu']['appId']
+        app_secret = keys['feishu']['appSecret']
+    except:
+        app_id = "cli_a93b169884f8dcc1"
+        app_secret = "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+    
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     token_data = {
-        "app_id": "cli_a93b169884f8dcc1",
-        "app_secret": "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+        "app_id": app_id,
+        "app_secret": app_secret
     }
     
     resp = requests.post(token_url, json=token_data)
@@ -1196,8 +1224,8 @@ def is_us_holiday():
     today_str = datetime.now().strftime("%Y-%m-%d")
     weekday = datetime.now().weekday()  # 0=周一, 6=周日
     
-    # 周末直接返回True（不交易）
-    if weekday >= 5:
+    # 周日不交易（weekday=6），但周六凌晨需生成周五日报
+    if weekday >= 6:
         return True
     
     return today_str in us_holidays_2026

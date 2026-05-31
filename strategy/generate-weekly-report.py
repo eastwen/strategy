@@ -22,20 +22,13 @@ API_KEYS_FILE = "/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json"
 
 
 def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
-    """用LLM生成下周操作建议"""
+    """用LLM生成下周操作建议 - 通过llm_stock_analyzer统一调用"""
+    import sys
+    sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+    from llm_stock_analyzer import get_llm_client
     
-    # 加载API Key（用正则表达式提取，避免JSON解析错误）
-    try:
-        with open('/home/admin/.openclaw/openclaw.json', 'r') as f:
-            content = f.read()
-            # 用正则提取MODELSTUDIO_API_KEY
-            import re
-            match = re.search(r'"MODELSTUDIO_API_KEY":\s*"([^"]+)"', content)
-            api_key = match.group(1) if match else ''
-    except:
-        api_key = ''
-    
-    if not api_key:
+    client = get_llm_client()
+    if not client.api_key:
         return """1. **持仓管理**：按止损止盈规则执行（止损-6%，止盈+15%）
 2. **新开仓**：等待评分≥70分信号
 3. **仓位控制**：单标的≤12%，总仓位≤60%"""
@@ -64,34 +57,10 @@ def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
 
 直接回复3条建议："""
     
-    try:
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
-        
-        data = {
-            'model': 'qwen-coder-turbo-0919',
-            'messages': [{'role': 'user', 'content': prompt}],
-            'max_tokens': 300,
-            'temperature': 0.7
-        }
-        
-        resp = requests.post(
-            'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-            headers=headers,
-            json=data,
-            timeout=30
-        )
-        
-        if resp.status_code == 200:
-            result = resp.json()
-            content = result['choices'][0]['message']['content']
-            return content.strip()
-        else:
-            print(f"LLM API错误: {resp.status_code}")
-    except Exception as e:
-        print(f"LLM调用失败: {e}")
+    result = client.call(prompt, max_tokens=300, temperature=0.7)
+    if result:
+        return result
+    print("⚠️ LLM周报建议调用失败")
     
     # 降级方案
     return """1. **持仓管理**：按止损止盈规则执行（止损-6%，止盈+15%）
@@ -116,7 +85,7 @@ class WeeklyReportV3:
             keys = json.load(f)
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_chat_id = keys['feishu'].get('chatId', '') or keys['feishu']['openId']
+        self.feishu_chat_id = keys['feishu'].get('chatId', 'oc_f6c5168cb212e624d21ccfabed49b083')
     
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -352,8 +321,40 @@ class WeeklyReportV3:
         print("🧠 生成LLM操作建议...")
         llm_suggestion = get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct)
         
+        # LLM风险评估
+        from llm_stock_analyzer import get_llm_client
+        llm_client = get_llm_client()
+        llm_risk = llm_client.get_risk_assessment({
+            'pos_pct': pos_pct, 'cash_pct': 100 - pos_pct,
+            'vix': vix, 'vhsi': vhsi,
+            'total_asset': total_asset, 'positions': self.positions,
+            'initial': initial
+        })
+        
         # 生成报告
-        acc_names = {15270898: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
+        acc_names = {15270902: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
+        
+        # 构建LLM风险提示文本
+        risk_section = "### 1. 风险评估\n\n"
+        if llm_risk:
+            for line in llm_risk.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 4:
+                    level = parts[0].strip()
+                    rtype = parts[1].strip()
+                    desc = parts[2].strip()
+                    action = parts[3].strip()
+                    risk_section += f"• {level} **{rtype}风险**：{desc} → {action}\n\n"
+                elif len(parts) >= 2:
+                    risk_section += f"• {line}\n\n"
+        else:
+            vix_level = "🔴高" if vix >= 25 else "🟠中" if vix >= 20 else "🟡低"
+            risk_section += f"• {vix_level} **系统性风险**：VIX({vix:.1f})/VHSI({vhsi:.1f})\n\n"
+            if pos_pct > 60:
+                risk_section += f"• 🟠 **集中度风险**：持仓占比{pos_pct:.1f}%偏高\n\n"
         
         report = f"""# 📊 每周交易报告
 
@@ -509,16 +510,7 @@ class WeeklyReportV3:
 
 ## ⚠️ 七、风险提示
 
-### 1. 系统性风险
-• {'🔴' if vix >= 25 or vhsi >= 25 else '🟡' if vix >= 20 or vhsi >= 20 else '🟢'} **高波动期**：VIX({vix:.1f})/VHSI({vhsi:.1f})，建议控制仓位在30%以下
-
-### 2. 非系统性风险
-• ⚠️ **持仓集中度**：当前持仓占比{pos_pct:.1f}%
-
-### 3. 操作建议
-• {'📉 **减仓建议**：建议减仓至30-40%' if pos_pct > 60 else '✅ **仓位合理**：当前仓位在正常范围'}
-• 📊 **止损设置**：单票止损-6%
-• ⏰ **持仓周期**：最长6天
+{risk_section}
 
 ---
 

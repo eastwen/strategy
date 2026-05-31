@@ -3,7 +3,7 @@
   "sync_time": "2026-03-28T07:30:04.215458",
   "accounts": [
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "acc_type": "MARGIN",
       "total_assets": 1002570.941,
       "cash": -78033.467,
@@ -13,7 +13,7 @@
   ],
   "positions": [
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.MU",
       "shares": 330,
       "cost_price": 365.93,
@@ -21,7 +21,7 @@
       "pl_ratio": -3.544667012816659
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.ETR",
       "shares": 1104,
       "cost_price": 110.205,
@@ -29,7 +29,7 @@
       "pl_ratio": 0.04083299305839118
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.CEG",
       "shares": 398,
       "cost_price": 304.975,
@@ -37,7 +37,7 @@
       "pl_ratio": -1.4640544306910401
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.SNDK",
       "shares": 192,
       "cost_price": 622.05,
@@ -45,7 +45,7 @@
       "pl_ratio": -1.7570934812314123
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.COP",
       "shares": 908,
       "cost_price": 133.21,
@@ -53,7 +53,7 @@
       "pl_ratio": 0.563020794234667
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.CIEN",
       "shares": 301,
       "cost_price": 399.755,
@@ -61,7 +61,7 @@
       "pl_ratio": -0.0637890708058686
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.MO",
       "shares": 3642,
       "cost_price": 66.545,
@@ -69,7 +69,7 @@
       "pl_ratio": -0.17281538808325192
     },
     {
-      "acc_id": 15270898,
+      "acc_id": 15270902,
       "symbol": "US.XOM",
       "shares": 711,
       "cost_price": 170.84,

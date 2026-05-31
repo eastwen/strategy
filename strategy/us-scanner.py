@@ -755,16 +755,28 @@ class USScanner:
                         candidate['final_score'] = candidate.get('score', 70)
                         candidate['llm_adjust'] = 0
                         candidate['llm_reason'] = 'LLM分析失败'
+                        candidate['llm_passed'] = False  # LLM未通过
             else:
                 candidate['final_score'] = candidate.get('score', 70)
                 candidate['llm_adjust'] = 0
                 candidate['llm_reason'] = ''
+                candidate['llm_passed'] = True  # 未达到LLM分析阈值，默认通过
             
             # 只保留最终评分>=65的
             if candidate.get('final_score', 0) >= 65:
                 llm_analyzed.append(candidate)
         
         results = llm_analyzed
+        
+        # ===== LLM分析完成后，直接触发交易 =====
+        high_score_opportunities = [
+            c for c in results 
+            if c.get('llm_passed', True) and c.get('final_score', 0) >= 80
+        ]
+        
+        if high_score_opportunities:
+            print(f"\n🚀 发现 {len(high_score_opportunities)} 个高分机会，尝试直接交易...")
+            self.execute_trades_directly(high_score_opportunities)
         
         data = {
             'market': 'US',
@@ -786,6 +798,100 @@ class USScanner:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
         print(f"💾 结果已保存")
+    
+    def execute_trades_directly(self, opportunities):
+        """LLM分析完成后，直接触发交易"""
+        try:
+            # 导入自动交易模块（文件名是auto-trader.py）
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("auto_trader", "/home/admin/.openclaw/workspace-stock/strategy/auto-trader.py")
+            auto_trader_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(auto_trader_module)
+            AutoTrader = auto_trader_module.AutoTrader
+            
+            trader = AutoTrader()
+            
+            # 连接Futu
+            if not trader.connect_futu():
+                print("   ❌ 无法连接Futu，跳过交易")
+                return
+            
+            # 检查交易时间
+            if not trader.check_trading_hours('us'):
+                print("   ⏸️ 非美股交易时间，跳过")
+                return
+            
+            # 获取账户信息
+            account = trader.get_account_and_positions('us')
+            if not account:
+                print("   ❌ 无法获取账户信息")
+                return
+            
+            print(f"   💰 账户: 总资产${account['total_assets']:,.0f}, 现金${account['cash']:,.0f}")
+            print(f"   📈 当前持仓: {len(account['positions'])}只")
+            
+            # 对每个高分机会尝试交易
+            for opp in opportunities[:3]:  # 最多处理前3个
+                symbol = opp.get('symbol', '')
+                price = opp.get('price', 0)
+                score = opp.get('final_score', 0)
+                
+                futu_symbol = f"US.{symbol}"
+                
+                # 检查是否已持仓
+                should, reason = trader.should_trade(futu_symbol, account['positions'], account.get('pending_orders', []))
+                if not should:
+                    print(f"   ⏭️ {symbol}: {reason}")
+                    continue
+                
+                # 检查技术指标
+                tech_signals = trader.check_technical_signals(symbol, market='us')
+                if not tech_signals.get('can_enter', False):
+                    print(f"   ⏭️ {symbol}: 技术指标不满足")
+                    continue
+                
+                # 检查仓位限制
+                current_position_value = account.get('market_val', 0)
+                position_check, _ = trader.check_position_limits(account['total_assets'], current_position_value)
+                if not position_check.get('can_add_position', False):
+                    print(f"   ⏭️ {symbol}: 仓位已满")
+                    break
+                
+                # 计算仓位
+                position_size = account['total_assets'] * trader.config.get('position_size', 0.12)
+                quantity = int(position_size / price) if price > 0 else 0
+                
+                if quantity > 0:
+                    print(f"\n   🎯 准备买入 {symbol}")
+                    print(f"      价格: ${price:.2f}")
+                    print(f"      数量: {quantity}股")
+                    print(f"      评分: {score}分")
+                    
+                    # 执行交易 (不再重复LLM分析，因为已经分析过了)
+                    entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
+                    success = trader.execute_trade(
+                        futu_symbol, 'BUY', quantity, price, 'us', 
+                        skip_llm=True,  # 跳过重复LLM分析
+                        score=score, 
+                        reasons=entry_reasons
+                    )
+                    
+                    if success:
+                        account['positions'].append({'symbol': futu_symbol})
+                        print(f"   ✅ {symbol} 交易成功")
+                    else:
+                        print(f"   ❌ {symbol} 交易失败")
+            
+            # 关闭连接
+            if trader.quote_ctx:
+                trader.quote_ctx.close()
+            if trader.trade_ctx:
+                trader.trade_ctx.close()
+                
+        except Exception as e:
+            print(f"   ❌ 直接交易失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def print_top_results(self, results, n=10):
         """打印Top N结果"""

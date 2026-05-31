@@ -36,7 +36,7 @@
   
   "entry_conditions": {
     "volume_surge": ">= 1.5x",
-    "rsi_range": "20-80",
+    "rsi_range": "40-65",
     "trend": "MA20上升, 价格>MA20",
     "enhance_signals": ">= 1个 (突破高点 或 布林收缩)"
   },
@@ -44,7 +44,7 @@
   "exit_conditions": {
     "stop_loss": "ATR 1.5x",
     "take_profit": "ATR 3.0x",
-    "rsi_overbought": "> 70",
+    "rsi_overbought": "> 65",
     "max_hold_days": 10
   },
   

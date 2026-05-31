@@ -24,7 +24,7 @@ class HKOptimizer:
         """获取所需数据"""
         data = {}
         
-        config_path = os.path.join(self.config_dir, 'hk-strategy-dynamic-v2.0.json')
+        config_path = os.path.join(self.config_dir, 'hk-strategy-dynamic-v2.1.json')
         try:
             with open(config_path, 'r') as f:
                 data['config'] = json.load(f)
@@ -158,6 +158,12 @@ class HKOptimizer:
         for s in self.analyze_params(data)['suggestions']:
             proposals.append({**s, 'id': f"HK{len(proposals)+1:03d}", 'category': '参数优化'})
         
+        # LLM深度分析
+        llm_proposals = self.llm_deep_analysis(data)
+        if llm_proposals:
+            for p in llm_proposals:
+                proposals.append({**p, 'id': f"HK{len(proposals)+1:03d}", 'category': 'LLM深度分析'})
+        
         if not proposals:
             proposals.append({
                 'id': 'HK001',
@@ -168,6 +174,67 @@ class HKOptimizer:
             })
         
         return proposals
+    
+    def llm_deep_analysis(self, data):
+        """LLM深度分析 - 通过llm_stock_analyzer统一调用"""
+        try:
+            from llm_stock_analyzer import get_llm_client
+            client = get_llm_client()
+            
+            config = data.get('config', {})
+            opportunities = data.get('opportunities', {})
+            
+            # 获取情绪数据
+            sentiment_info = self.analyze_market_sentiment(data)
+            vhsi = sentiment_info.get('vhsi', 20)
+            sentiment_level = sentiment_info.get('level', '正常')
+            
+            # 构建opportunities摘要
+            opp_count = 0
+            high_score = 0
+            if isinstance(opportunities, list):
+                opp_count = len(opportunities)
+                high_score = max((o.get('base_score', 0) for o in opportunities), default=0)
+            elif isinstance(opportunities, dict):
+                opp_list = opportunities.get('opportunities', [])
+                opp_count = len(opp_list)
+                high_score = max((o.get('base_score', 0) for o in opp_list), default=0)
+            
+            prompt = f"""你是专业的港股策略分析师。根据以下实时数据给出优化建议。
+
+当前策略配置: RSI范围{config.get('entry_conditions', {}).get('rsi_range', 'N/A')}, 成交量阈值{config.get('entry_conditions', {}).get('volume_threshold', 'N/A')}x
+市场情绪: VHSI={vhsi:.1f}({sentiment_level})
+当前候选机会: {opp_count}个, 最高评分: {high_score}分
+
+请分析策略是否有优化空间，如果有给出1-2条建议，每条格式：
+问题|建议|优先级
+
+优先级用: 高/中/低
+如果策略运行良好无需调整，回复: OK
+
+直接回复，不要其他内容。"""
+            
+            result = client.call(prompt, max_tokens=200, temperature=0.3)
+            if not result or 'OK' in result:
+                return []
+            
+            proposals = []
+            for line in result.strip().split('\n'):
+                line = line.strip()
+                if not line or '|' not in line:
+                    continue
+                parts = line.split('|')
+                if len(parts) >= 3:
+                    proposals.append({
+                        'type': 'llm_analysis',
+                        'issue': parts[0].strip(),
+                        'suggestion': parts[1].strip(),
+                        'priority': parts[2].strip()
+                    })
+            return proposals
+        except Exception as e:
+            print(f"⚠️ LLM深度分析失败: {e}")
+            return []
     
     def print_proposals(self, proposals):
         print("\n" + "="*60)
@@ -187,10 +254,20 @@ class HKOptimizer:
 
 def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
     """发送消息到飞书群聊"""
+    # 从.api-keys.json读取凭据
+    try:
+        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
+            keys = json.load(f)
+        app_id = keys['feishu']['appId']
+        app_secret = keys['feishu']['appSecret']
+    except:
+        app_id = "cli_a93b169884f8dcc1"
+        app_secret = "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+    
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     token_data = {
-        "app_id": "cli_a93b169884f8dcc1",
-        "app_secret": "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+        "app_id": app_id,
+        "app_secret": app_secret
     }
     
     try:

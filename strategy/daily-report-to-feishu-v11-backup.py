@@ -103,7 +103,7 @@ class ComprehensiveReportV11:
                         for p in poss if acc_id == 15270899 or 'HK' in str(p.get('symbol', ''))]
         else:
             positions = [p for acc_id, poss in self.positions_by_account.items() 
-                        for p in poss if acc_id == 15270898 and 'HK' not in str(p.get('symbol', ''))]
+                        for p in poss if acc_id == 15270902 and 'HK' not in str(p.get('symbol', ''))]
         
         if not positions:
             return None
@@ -241,8 +241,8 @@ class ComprehensiveReportV11:
                 for poss in self.positions_by_account.values():
                     self.positions.extend(poss)
                 
-                display_acc = accounts[0] if accounts else {'acc_id': 15270898}
-                self.account_data = self.accounts_data.get(display_acc.get('acc_id'), self.accounts_data.get(15270898))
+                display_acc = accounts[0] if accounts else {'acc_id': 15270902}
+                self.account_data = self.accounts_data.get(display_acc.get('acc_id'), self.accounts_data.get(15270902))
                 
                 total_pos_count = sum(len(p) for p in self.positions_by_account.values())
                 print(f"✅ 获取持仓数据: {total_pos_count}只")
@@ -333,7 +333,7 @@ class ComprehensiveReportV11:
         title = "🇭🇰🇺🇸 港股美股日报"
         date_str = datetime.now().strftime('%Y-%m-%d')
         
-        acc_names = {15270898: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
+        acc_names = {15270902: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
         symbol_names = {
             'NVDA': '英伟达', 'AAPL': '苹果', 'TSLA': '特斯拉',
             'AMD': '超微半导体', 'META': 'Meta', 'MSFT': '微软',

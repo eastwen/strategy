@@ -713,16 +713,28 @@ class HKScanner:
                         candidate['final_score'] = candidate.get('base_score', 70)
                         candidate['llm_adjust'] = 0
                         candidate['llm_reason'] = 'LLM分析失败'
+                        candidate['llm_passed'] = False  # LLM未通过
             else:
                 candidate['final_score'] = candidate.get('base_score', 70)
                 candidate['llm_adjust'] = 0
                 candidate['llm_reason'] = ''
+                candidate['llm_passed'] = True  # 未达到LLM分析阈值，默认通过
             
             # 只保留最终评分>=65的
             if candidate.get('final_score', 0) >= 65:
                 llm_analyzed.append(candidate)
         
         results = llm_analyzed
+        
+        # ===== LLM分析完成后，直接触发交易 =====
+        high_score_opportunities = [
+            c for c in results 
+            if c.get('llm_passed', True) and c.get('final_score', 0) >= 70  # 港股阈值70分
+        ]
+        
+        if high_score_opportunities:
+            print(f"\n🚀 发现 {len(high_score_opportunities)} 个高分机会，尝试直接交易...")
+            self.execute_trades_directly(high_score_opportunities)
         
         data = {
             'market': 'HK',
@@ -741,6 +753,93 @@ class HKScanner:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
         print(f"💾 结果已保存")
+    
+    def execute_trades_directly(self, opportunities):
+        """LLM分析完成后，直接触发交易"""
+        try:
+            # 导入自动交易模块（文件名是auto-trader.py）
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("auto_trader", "/home/admin/.openclaw/workspace-stock/strategy/auto-trader.py")
+            auto_trader_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(auto_trader_module)
+            AutoTrader = auto_trader_module.AutoTrader
+            
+            trader = AutoTrader()
+            
+            # 连接Futu
+            if not trader.connect_futu():
+                print("   ❌ 无法连接Futu，跳过交易")
+                return
+            
+            # 检查交易时间
+            if not trader.check_trading_hours('hk'):
+                print("   ⏸️ 非港股交易时间，跳过")
+                return
+            
+            # 获取账户信息
+            account = trader.get_account_and_positions('hk')
+            if not account:
+                print("   ❌ 无法获取账户信息")
+                return
+            
+            print(f"   💰 账户: 总资产${account['total_assets']:,.0f}, 现金${account['cash']:,.0f}")
+            print(f"   📈 当前持仓: {len(account['positions'])}只")
+            
+            # 对每个高分机会尝试交易
+            for opp in opportunities[:3]:  # 最多处理前3个
+                symbol = opp.get('symbol', '')
+                price = opp.get('price', 0)
+                score = opp.get('final_score', 0)
+                
+                # 检查是否已持仓
+                should, reason = trader.should_trade(symbol, account['positions'], account.get('pending_orders', []))
+                if not should:
+                    print(f"   ⏭️ {symbol}: {reason}")
+                    continue
+                
+                # 检查技术指标
+                tech_signals = trader.check_technical_signals(symbol, market='hk')
+                if not tech_signals.get('can_enter', False):
+                    print(f"   ⏭️ {symbol}: 技术指标不满足")
+                    continue
+                
+                # 计算仓位 (港股3%)
+                position_size = account['total_assets'] * trader.hk_config.get('position_size', 0.03)
+                raw_quantity = int(position_size / price) if price > 0 else 0
+                lot_size = trader._get_hk_lot_size(symbol)
+                quantity = (raw_quantity // lot_size) * lot_size  # 整手交易
+                
+                if quantity > 0:
+                    print(f"\n   🎯 准备买入 {symbol}")
+                    print(f"      价格: ${price:.2f}")
+                    print(f"      数量: {quantity}股 (每手{lot_size})")
+                    print(f"      评分: {score}分")
+                    
+                    # 执行交易 (不再重复LLM分析)
+                    entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
+                    success = trader.execute_trade(
+                        symbol, 'BUY', quantity, price, 'hk', 
+                        skip_llm=True,  # 跳过重复LLM分析
+                        score=score, 
+                        reasons=entry_reasons
+                    )
+                    
+                    if success:
+                        account['positions'].append({'symbol': symbol})
+                        print(f"   ✅ {symbol} 交易成功")
+                    else:
+                        print(f"   ❌ {symbol} 交易失败")
+            
+            # 关闭连接
+            if trader.quote_ctx:
+                trader.quote_ctx.close()
+            if trader.hk_trade_ctx:
+                trader.hk_trade_ctx.close()
+                
+        except Exception as e:
+            print(f"   ❌ 直接交易失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def print_top_results(self, results, n=10):
         """打印Top N结果"""
