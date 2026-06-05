@@ -1,274 +1,274 @@
 {
-  "time": "2026-04-09T01:59:13.229983",
+  "time": "2026-06-06T03:29:26.235736",
   "source": "news_integration",
   "alerts": [
     {
       "symbol": "",
-      "title": "Jeff Shell leaves Paramount after allegations of SEC violations; company calls claims 'baseless'",
+      "title": "Trump wants Bill Pulte to fire big chunk of national intelligence office staff: WSJ",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:33:06",
+      "timestamp": "2026-06-06T01:25:37",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Israel pounds Lebanon with heaviest airstrikes of war as Hezbollah pauses attacks - Reuters",
+      "title": "Trump's 'crazy' rebuke undercuts Netanyahu at a critical moment - Reuters",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T00:53:40",
+      "timestamp": "2026-06-06T01:12:52",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "The 'madman theory' of US-Iran negotiations: Ross Kerber - Reuters",
+      "title": "Global oil inventories depleted, next price spike could roil economies, markets - Reuters",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T00:26:40",
+      "timestamp": "2026-06-06T00:26:41",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "STOXX 600 logs best day in a year as Iran truce fuels relief rally - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-09T00:20:14",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Jim Cramer: Massive stock rebound underscores one of my key investing principles",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-09T00:15:04",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Wall Street jumps to near one-month highs after US-Iran ceasefire - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-09T00:04:17",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Trump announces 50% tariffs on nations supplying Iran with weapons - Reuters",
+      "title": "Iran using Lebanon as bargaining chip in US talks, Lebanese president says - Reuters",
       "source": "Finnhub",
       "sentiment": 1.0,
-      "timestamp": "2026-04-08T23:52:02",
+      "timestamp": "2026-06-06T00:23:03",
       "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "The new Trump trades: how investors are navigating Iran shocks - Reuters",
+      "title": "US says it issued sanctions on network smuggling Iranian LPG - Reuters",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:39:04",
+      "timestamp": "2026-06-06T00:05:50",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Trump meets NATO chief as Iran war strains alliance - Reuters",
+      "title": "Boeing to start 737 Max production on new assembly line July 6, CEO says",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:38:50",
+      "timestamp": "2026-06-05T23:38:32",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Exxon signals lower Q1 profit despite higher oil, gas revenue from Iran war price spikes - Reuters",
+      "title": "Iran declares support for Hezbollah with wider peace deal in doubt - Reuters",
       "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:35:56",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "US military says it's ready to resume Iran fighting if diplomacy fails - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:32:03",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "We're trimming our stake in an AI winner to take advantage of great prices",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:31:24",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "We're exiting our position in a drug stock and initiating a stake in a more attractive rival",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:18:48",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Global energy stocks plunge as US-Iran ceasefire hits oil - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:08:39",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Shippers seek clarity on Hormuz reopening after US-Iran ceasefire deal - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T23:08:36",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Trump says US will work closely with Iran, discuss sanctions - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T22:59:49",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran struck Saudi Arabia oil pipeline just hours after ceasefire, source says - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T22:35:22",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "The U.S. housing markets where million-dollar listings are standard",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T22:10:01",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran war ceasefire pushes energy markets into twilight zone - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T22:09:48",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran's shattered economy means any success in war may be fleeting - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-08T21:43:03",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "3 Reasons SABR is Risky and 1 Stock to Buy Instead",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245361",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Stock Market Today: Dow Surges 1,200 Points On Ceasefire; This Data Center Name Breaks Out (Live Coverage)",
-      "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-04-09T01:59:02.245400",
+      "timestamp": "2026-06-05T22:59:51",
       "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Why D-Wave Quantum Stock Plummeted 23.2% Last Month and Has Inched Lower in April",
-      "source": "Yahoo Finance",
+      "title": "US preparing draft resolution condemning Iran at IAEA, diplomats say - Reuters",
+      "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245424",
+      "timestamp": "2026-06-05T22:42:15",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "The Best Trillion-Dollar Stock to Buy Right Now, According to Wall Street",
-      "source": "Yahoo Finance",
+      "title": "US forces board sanctioned tanker in Indian Ocean, Pentagon says - Reuters",
+      "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245439",
+      "timestamp": "2026-06-05T22:14:09",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Stock Market Rebound: 3 Top AI Bargains to Snap Up Now",
-      "source": "Yahoo Finance",
-      "sentiment": 1.0,
-      "timestamp": "2026-04-09T01:59:02.245453",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Why e.l.f. Beauty Stock Plummeted 34.2% Last Month But Is Gaining in April",
-      "source": "Yahoo Finance",
-      "sentiment": 1.0,
-      "timestamp": "2026-04-09T01:59:02.245471",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "US Equity Indexes Surge, Crude Oil Plummets as Iran Ceasefire Deal Eases Geopolitical Risk",
-      "source": "Yahoo Finance",
-      "sentiment": 1.0,
-      "timestamp": "2026-04-09T01:59:02.245491",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Stocks Rally on Cease-Fire Deal. Will It Last?",
-      "source": "Yahoo Finance",
+      "title": "Jim Cramer's top 10 things to watch in the stock market Friday",
+      "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245514",
+      "timestamp": "2026-06-05T21:22:07",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "U.S stocks rally, oil prices tumble after Iran ceasefire",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245532",
+      "title": "Iran says it fired warning missiles and drones at US warships in Gulf of Oman - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-05T20:19:03",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Why Applied Digital Stock Jumped Today",
+      "title": "Broadway's $1.9 billion season is the latest sign of consumers splurging on experiences",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T20:00:01",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Family offices bet on sports, from pickleball leagues to smart soccer balls",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T20:00:01",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "No tech, no problem. Dow makes record and traders think these stocks can lead now",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T19:45:23",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "India's economy expands 7.8% over January to March — faster than expected",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T18:57:42",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Middle East conflict pushing millions into hunger, WFP says - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T18:27:48",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "UK house prices fall unexpectedly as market feels Iran war impact - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-05T14:10:00",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Oman says Mina al Fahal terminal operations normal after reported oil export halt - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T10:38:00",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Stocks fall as strong jobs data fuels rate hike bets; oil set for weekly gain - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-05T09:35:00",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Oil prices fall after Oman says Mina al Fahal operations proceeding normally - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-05T08:28:00",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "1 High-Yield Dividend Stock Under $30 to Buy Hand Over Fist and Hold Forever",
       "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-04-09T01:59:02.245552",
+      "timestamp": "2026-06-06T03:29:02.205117",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "2 Growth ETFs to Buy and Hold for 20 Years",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205272",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Goldman’s Future Tech ETF Turned $10k Into $15.2k While the S&amp;P 500 Made $1.1k",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205308",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Market Indexes Tumble at Midday as Treasury Yields Spike on Hot Employment Report",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205348",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Tech Stocks Fall. Why Broadcom, Google, AI IPOs May Have Triggered Sell-Off.",
+      "source": "Yahoo Finance",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-06T03:29:02.205368",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Equities Fall, Yields Jump Intraday After Jobs Report; Tech Leads Sell-Off",
+      "source": "Yahoo Finance",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-06T03:29:02.205395",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "If You Want to Buy SpaceX Before the IPO, This ETF Makes It Easier Than You Think",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205413",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Coinbase Stock Is Struggling. Why Crypto Trading Could Be Slow to Recover.",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205431",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Yes, Stocks Were Volatile This Week. Stay Invested.",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205447",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Trump says ‘stocks should go up, not down’ amid market slump",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-06T03:29:02.205461",
       "importance": "中",
       "alert_type": "新闻"
     }
