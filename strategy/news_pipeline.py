@@ -67,43 +67,46 @@ class NewsDatabase:
     
     def save_news(self, news_list: List[Dict[str, Any]]):
         """保存新闻到数据库"""
+        # 用于自动提取股票代码
+        stock_extractor = StableNewsSources()
+        
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         saved_count = 0
         for news in news_list:
             try:
-                # 检查是否已存在
-                cursor.execute('''
-                SELECT id FROM news 
-                WHERE source = ? AND title = ? AND timestamp = ?
-                ''', (news['source'], news['title'], news.get('timestamp', '')))
+                # 自动提取股票代码（如果原新闻没有提供symbol）
+                symbol = news.get('symbol', '')
+                if not symbol:
+                    extracted = stock_extractor.extract_stocks(news.get('title', ''))
+                    if extracted:
+                        symbol = extracted[0]  # 取第一个匹配的股票代码
                 
-                if cursor.fetchone() is None:
-                    # 插入新闻
+                # 插入新闻（OR IGNORE避免UNIQUE约束冲突）
+                cursor.execute('''
+                INSERT OR IGNORE INTO news (source, title, content, url, symbol, sentiment, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    news['source'],
+                    news['title'],
+                    news.get('content', ''),
+                    news.get('url', ''),
+                    symbol,
+                    news.get('sentiment', 0.5),
+                    news.get('timestamp', datetime.now().isoformat())
+                ))
+                
+                news_id = cursor.lastrowid
+                
+                # 保存股票提及
+                for mentioned_symbol in news.get('stocks', []):
                     cursor.execute('''
-                    INSERT INTO news (source, title, content, url, symbol, sentiment, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        news['source'],
-                        news['title'],
-                        news.get('content', ''),
-                        news.get('url', ''),
-                        news.get('symbol', ''),
-                        news.get('sentiment', 0.5),
-                        news.get('timestamp', datetime.now().isoformat())
-                    ))
-                    
-                    news_id = cursor.lastrowid
-                    
-                    # 保存股票提及
-                    for symbol in news.get('stocks', []):
-                        cursor.execute('''
-                        INSERT OR IGNORE INTO stock_mentions (news_id, symbol, mentioned_at)
-                        VALUES (?, ?, ?)
-                        ''', (news_id, symbol, news.get('timestamp', datetime.now().isoformat())))
-                    
-                    saved_count += 1
+                    INSERT OR IGNORE INTO stock_mentions (news_id, symbol, mentioned_at)
+                    VALUES (?, ?, ?)
+                    ''', (news_id, mentioned_symbol, news.get('timestamp', datetime.now().isoformat())))
+                
+                saved_count += 1
             except Exception as e:
                 print(f"  保存新闻失败: {e}")
                 continue
@@ -413,17 +416,19 @@ class StableNewsSources:
         return news
     
     def fetch_reuters_tech(self) -> List[Dict[str, Any]]:
-        """Reuters Tech - 路透科技新闻"""
+        """Google News Tech - 科技新闻（原Reuters源已失效，替换为Google News RSS）"""
         news = []
         try:
-            url = "https://feeds.reuters.com/reuters/technologyNews"
+            url = "https://news.google.com/rss/search?q=technology+stocks&hl=en-US&gl=US&ceid=US:en"
             resp = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'})
             if resp.status_code == 200:
                 titles = re.findall(r'<title><!\[CDATA\[(.*?)\]\]></title>', resp.text)[:15]
+                if not titles:
+                    titles = re.findall(r'<title>(.*?)</title>', resp.text)[:15]
                 for title in titles:
-                    if title and 'Reuters' not in title:
+                    if title and 'Google News' not in title:
                         news.append({
-                            'source': 'Reuters Tech',
+                            'source': 'Google News Tech',
                             'title': title[:150],
                             'content': '',
                             'url': '',
@@ -432,7 +437,7 @@ class StableNewsSources:
                             'sentiment': self.analyze_sentiment(title)
                         })
         except Exception as e:
-            print(f"  Reuters Tech错误: {e}")
+            print(f"  Google News Tech错误: {e}")
         return news
     
     def fetch_tushare_news(self) -> List[Dict[str, Any]]:
@@ -892,6 +897,20 @@ class StableNewsSources:
         '比亚迪': 'BYD', '宁德时代': 'CATL',
     }
     
+    # 常见美股代码（用于从标题中直接匹配纯代码）
+    COMMON_TICKERS = {
+        'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'TSLA', 'NVDA',
+        'AMD', 'INTC', 'QCOM', 'AVGO', 'CSCO', 'ORCL', 'CRM', 'NOW',
+        'ADBE', 'MU', 'WDC', 'STX', 'NKE', 'V', 'MA', 'PYPL', 'SQ',
+        'UBER', 'LYFT', 'ABNB', 'SPOT', 'NFLX', 'DIS', 'JPM', 'BAC',
+        'GS', 'WFC', 'C', 'AXP', 'COST', 'WMT', 'TGT', 'HD', 'LOW',
+        'SBUX', 'MCD', 'KO', 'PEP', 'ARM', 'SMCI', 'TSM', 'XPEV',
+        'NIO', 'LI', 'BYD', 'CATL', 'HOOD', 'PLTR', 'SNOW', 'CRWD',
+        'PANW', 'NET', 'DDOG', 'MDB', 'ZS', 'CRWD', 'MRVL', 'ON',
+        'LLY', 'UNH', 'JNJ', 'PFE', 'MRK', 'ABT', 'TMO', 'ISRG',
+        'CAT', 'DE', 'BA', 'GE', 'HON', 'RTX', 'LMT', 'NOC',
+    }
+    
     def extract_stocks(self, text: str) -> List[str]:
         """提取股票代码"""
         if not text:
@@ -903,6 +922,11 @@ class StableNewsSources:
         for name, symbol in self.COMPANY_TO_SYMBOL.items():
             if name in text_lower:
                 stocks.append(symbol)
+        # 纯代码匹配（标题中直接出现的ticker如"AVGO surged"）
+        words = re.findall(r'\b([A-Z]{2,5})\b', text)
+        for word in words:
+            if word in self.COMMON_TICKERS and word not in stocks:
+                stocks.append(word)
         return list(set(stocks))[:5]
     
     def analyze_sentiment(self, text: str) -> float:
@@ -1199,3 +1223,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+# 新增对外统一调用接口，兼容现有调用
+def fetch_stock_news(symbol, limit=10):
+    """对外暴露的拉取股票新闻接口，兼容原有调用"""
+    return run_news_pipeline(symbol, limit=limit)
+

@@ -17,7 +17,7 @@ from datetime import datetime
 LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 LLM_MODEL    = "qwen-turbo"
 LLM_FALLBACK = "qwen-plus-0112"
-LLM_API_KEY  = "sk-xxx（请替换为你的通义千问API Key）"
+LLM_API_KEY  = "sk-30c44cbba5eb43f2bf0a5c9a05d79d11"
 # ==========================
 
 

@@ -32,7 +32,7 @@ class MonthlyReportV2:
         self.finnhub_key = keys['finnhub']['api_key']
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_chat_id = keys['feishu'].get('chatId', '') or keys['feishu'].get('openId', 'oc_f6c5168cb212e624d21ccfabed49b083')
+        self.feishu_chat_id = keys['feishu'].get('chatId', 'oc_f6c5168cb212e624d21ccfabed49b083')
     
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -75,7 +75,7 @@ class MonthlyReportV2:
                         'symbol': symbol,
                         'shares': pos['shares'],
                         'cost': pos['cost_price'],
-                        'pnl_pct': pos.get('pl_ratio', 0),
+                        'pnl_pct': pos.get('pl_ratio', 0) * 100,  # 小数转换为百分比
                         'market_val': pos.get('market_val', 0)
                     })
                 

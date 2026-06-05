@@ -161,7 +161,7 @@ class HKScanner:
         return False, "非扫描时间"
     
     def calculate_score(self, stock_data, price, prev_close, volume=None, news_sentiment=None):
-        """计算评分（包含行业权重和技术条件）"""
+        """计算评分（技术面+消息面统一评分，无行业权重）"""
         score = 60
         
         # 1. 技术面评分
@@ -210,11 +210,6 @@ class HKScanner:
             # 将情绪评分(0-100)转换为分数调整(-15到+15)
             sentiment_adjustment = (sentiment_score - 50) * 0.3  # 中心点在50分
             score += sentiment_adjustment
-        
-        # 3. 行业权重调整（已取消，现在扫描整个恒生+恒生科技）
-        # 保留代码但不做调整
-        stock_code = stock_data.get('code', '')
-        stock_name = stock_data.get('name', '')
         
         # 4. 技术条件检查（entry_conditions）
         tech_score = self.check_technical_conditions(stock_data, price, prev_close, volume)
@@ -821,7 +816,8 @@ class HKScanner:
                         symbol, 'BUY', quantity, price, 'hk', 
                         skip_llm=True,  # 跳过重复LLM分析
                         score=score, 
-                        reasons=entry_reasons
+                        reasons=entry_reasons,
+                        opportunity=opp
                     )
                     
                     if success:

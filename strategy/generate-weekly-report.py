@@ -122,7 +122,7 @@ class WeeklyReportV3:
                         'symbol': symbol,
                         'shares': pos['shares'],
                         'cost': pos['cost_price'],
-                        'pnl_pct': pos.get('pl_ratio', 0),
+                        'pnl_pct': pos.get('pl_ratio', 0) * 100,  # 小数转换为百分比
                         'market_val': pos.get('market_val', 0),
                         'acc_id': pos.get('acc_id')
                     })

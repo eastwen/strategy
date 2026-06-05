@@ -309,7 +309,7 @@ class ComprehensiveReportV11:
                         'shares': shares,
                         'cost': cost,
                         'price': price,
-                        'pnl_pct': pl_ratio,
+                        'pnl_pct': pl_ratio * 100,  # 小数转换为百分比，和交易系统单位统一
                         'market_val': market_val
                     })
                 
@@ -722,17 +722,33 @@ class ComprehensiveReportV11:
             pl_txt = '盈利' if total_pnl_a >= 0 else '亏损'
             report += f"| 浮动盈亏 | ${total_pnl_a:+,.2f} | {pl_txt} |\n\n"
         
+        # 加载交易系统的持仓目标价数据（同源）
+        position_targets = {}
+        try:
+            with open('/home/admin/.openclaw/workspace-stock/data/open-positions.json', 'r') as f:
+                positions = json.load(f)
+            for p in positions:
+                position_targets[p['symbol']] = {
+                    'target_stop_loss': p.get('target_stop_loss', round(p['entry_price'] * 0.94, 2)),
+                    'target_take_profit': p.get('target_take_profit', round(p['entry_price'] * 1.08, 2))
+                }
+        except:
+            pass
+        
         if all_positions:
             report += "## 📦 二、当前持仓明细\n\n"
-            report += "| 标的代码 | 标的名称 | 持仓数量 | 平均成本 | 当前市值 | 浮动盈亏 | 盈亏比例 | 止损线 | 目标价 |\n"
-            report += "|----------|----------|----------|----------|----------|----------|----------|--------|--------|\n"
+            report += "| 标的代码 | 标的名称 | 持仓数量 | 平均成本 | 当前市值 | 浮动盈亏 | 盈亏比例 | 止损价 | 目标止盈价 |\n"
+            report += "|----------|----------|----------|----------|----------|----------|----------|--------|------------|\n"
             for pos in all_positions:
                 sym = pos['symbol']
                 name = symbol_names.get(sym, sym)
                 mv = pos['shares'] * pos['price']
                 pnl = pos['shares'] * (pos['price'] - pos['cost'])
-                target = pos['cost'] * 1.15
-                report += f"| {sym} | {name} | {pos['shares']}股 | ${pos['cost']:.2f} | ${mv:,.2f} | ${pnl:+,.2f} | {pos['pnl_pct']:+.2f}% | -6% | ${target:.0f} |\n"
+                # 优先读取交易系统的同源目标价，没有则按规则计算
+                target_info = position_targets.get(sym, {})
+                stop_loss = target_info.get('target_stop_loss', round(pos['cost'] * 0.94, 2))
+                take_profit = target_info.get('target_take_profit', round(pos['cost'] * 1.08, 2))
+                report += f"| {sym} | {name} | {pos['shares']}股 | ${pos['cost']:.2f} | ${mv:,.2f} | ${pnl:+,.2f} | {pos['pnl_pct']:+.2f}% | ${stop_loss:.2f} | ${take_profit:.2f} |\n"
             report += "\n"
         
         # 策略持仓收益统计
@@ -1133,44 +1149,19 @@ def create_feishu_doc(title, content):
     return None
 
 def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
-    """发送消息到飞书群聊"""
-    # 从.api-keys.json读取凭据
+    """发送消息到飞书群聊 - 使用FeishuPusher"""
     try:
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            keys = json.load(f)
-        app_id = keys['feishu']['appId']
-        app_secret = keys['feishu']['appSecret']
-    except:
-        app_id = "cli_a93b169884f8dcc1"
-        app_secret = "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
-    
-    token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    token_data = {
-        "app_id": app_id,
-        "app_secret": app_secret
-    }
-    
-    resp = requests.post(token_url, json=token_data)
-    token = resp.json().get('tenant_access_token', '')
-    
-    if not token:
-        print("❌ 获取飞书token失败")
+        from feishu_pusher import FeishuPusher
+        pusher = FeishuPusher()
+        # 临时设置chat_id
+        original_chat_id = pusher.chat_id
+        pusher.chat_id = chat_id
+        success = pusher.send_message(message)
+        pusher.chat_id = original_chat_id
+        return success
+    except Exception as e:
+        print(f"❌ 发送消息异常: {e}")
         return False
-    
-    msg_url = "https://open.feishu.cn/open-apis/im/v1/messages"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    msg_data = {
-        "receive_id": chat_id,
-        "msg_type": "text",
-        "content": json.dumps({"text": message})
-    }
-    params = {"receive_id_type": "chat_id"}
-    
-    resp = requests.post(msg_url, headers=headers, json=msg_data, params=params)
-    return resp.status_code == 200
 
 
 def is_hk_holiday():

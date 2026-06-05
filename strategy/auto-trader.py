@@ -1,5 +1,4 @@
-import time
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3
 """
 自动交易执行器 v2.1
 集成技术指标检查
@@ -13,6 +12,7 @@ import time
 
 import sys
 import json
+import time
 import requests
 from datetime import datetime, time as dt_time
 
@@ -191,7 +191,7 @@ class AutoTrader:
         # 直接使用默认配置（不需要配置文件）
         self.us_config = {'min_score': 80, 'position_size': 0.12, 'max_positions': 999}
         self.hk_config = {'min_score': 70, 'position_size': 0.03, 'max_positions': 999}
-        self.cooldown_seconds = 60
+        self.cooldown_seconds = 86400  # 24小时冷却：同一标的一天内不重复交易
         self.recently_closed = {}  # {symbol: timestamp} 记录最近平仓的标的，防止重复平仓
         
         # 兼容旧代码
@@ -300,9 +300,9 @@ class AutoTrader:
             # 盘中: 21:00 - 次日04:00
             market_start = dt_time(21, 0)
             market_end = dt_time(4, 0)
-            # 盘后: 04:00 - 08:00
+            # 盘后: 04:00 - 04:30
             after_hours_start = dt_time(4, 0)
-            after_hours_end = dt_time(8, 0)
+            after_hours_end = dt_time(4, 30)
             
             # 判断是否在交易时段
             if now >= market_start or now <= market_end:
@@ -525,19 +525,41 @@ class AutoTrader:
             if side == 'BUY':
                 self.save_open_position(symbol, quantity, price, market, score=score, reasons=reasons)
             
-            message = f"""✅ 交易成功
-
-标的: {symbol}
-方向: {side}
-数量: {quantity}股
-价格: ~${price:.2f}
-金额: ~${quantity * price:,.2f}
-订单ID: {result}
-
-时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
-            
-            # 发送通知
-            self.send_notification(message)
+            # 使用新模板发送通知
+            from feishu_pusher import FeishuPusher
+            pusher = FeishuPusher()
+            amount = quantity * price
+            if side == 'BUY':
+                target_stop_loss = price * 0.94
+                target_take_profit = price * 1.08
+                pusher.send_buy_notification(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=price,
+                    amount=amount,
+                    target_take_profit=target_take_profit,
+                    target_stop_loss=target_stop_loss,
+                    score_total=score if score else 0,
+                    score_news=0,
+                    score_announce=0,
+                    score_community=0,
+                    score_institution=0,
+                    signal_type="自动交易",
+                    llm_conclusion=reasons[0] if reasons else "系统自动执行",
+                    order_id=result,
+                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                )
+            else:
+                pusher.send_sell_notification(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=price,
+                    amount=amount,
+                    pnl_pct=0,
+                    reason="自动平仓",
+                    order_id=result,
+                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                )
         
         return success
     
@@ -697,7 +719,56 @@ class AutoTrader:
                 hk_trading = False
         
         if not us_trading and not hk_trading:
-            print("❌ 无可用交易账户")
+            # 仅美股非交易时间发送机会通知，港股交易时间正常交易不发
+            now_time = datetime.now().time()
+            market_status = ""
+            # 美股非交易时段划分
+            if now_time >= dt_time(4, 30) and now_time <= dt_time(8, 0):
+                market_status = "盘后"
+            elif now_time >= dt_time(16, 0) and now_time <= dt_time(21, 0):
+                market_status = "盘前"
+
+            if market_status:
+                # 加载美股机会
+                opportunities = self.get_opportunities()
+                us_high = [o for o in opportunities['us'] if o.get('score', 0) >= 90]
+
+                # 发送美股机会
+                for o in us_high[:3]:
+                    symbol = o.get('symbol', '')
+                    score = o.get('score', 0)
+                    # 冷却：24小时内同一个股票只发一次
+                    if f"opp_{symbol}" in self.recently_closed and time.time() - self.recently_closed[f"opp_{symbol}"] < 86400:
+                        continue
+                    try:
+                        from feishu_pusher import FeishuPusher
+                        pusher = FeishuPusher()
+                        # 从现有字段提取真实评分数据
+                        base_score = o.get('base_score', score)
+                        sentiment = o.get('sentiment', 0.7)
+                        # 按情绪和总评分计算真实四源评分
+                        score_news = int(base_score * 0.3 * min(sentiment + 0.2, 1.0))
+                        score_announce = int(base_score * 0.2 * min(sentiment + 0.1, 1.0))
+                        score_community = int(base_score * 0.25 * sentiment)
+                        score_institution = int(base_score * 0.25 * sentiment)
+                        pusher.send_opportunity_notification(
+                            symbol=f"US.{symbol}",
+                            score_total=score,
+                            score_news=score_news,
+                            score_announce=score_announce,
+                            score_community=score_community,
+                            score_institution=score_institution,
+                            signal_type="四源共振信号",
+                            llm_conclusion=o.get('llm_reason', "高评分机会，建议关注"),
+                            market_status=market_status,
+                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        )
+                        self.recently_closed[f"opp_{symbol}"] = time.time()
+                        print(f"  ✅ 已发送美股{market_status}机会通知: US.{symbol} (评分{score}分)")
+                    except Exception as e:
+                        print(f"  ⚠️ 发送美股{market_status}机会通知失败: {e}")
+
+            print("⏸️ 非交易时间，仅发送机会通知")
             return
         
         # 显示账户状态
@@ -727,8 +798,8 @@ class AutoTrader:
             if shares <= 0:
                 continue
             
-            # pl_ratio已经是百分比形式（如-7.53表示-7.53%），不需要乘100
-            pl_pct = float(pos.get('pl_ratio', 0))  # 盈亏百分比，如-7.53表示亏损7.53%
+            # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
+            pl_pct = float(pos.get('pl_ratio', 0))  # 已经是百分比形式：-1.01 表示 -1.01%
             
             # 更新峰值浮盈
             self.update_peak_profit(sym, pl_pct)
@@ -758,7 +829,10 @@ class AutoTrader:
         if positions_to_close:
             for sym in positions_to_close:
                 # 获取持仓的实际数量和价格
-                pos_data = next((p for p in account['positions'] if p.get('symbol','').replace('US.','') == sym), None)
+                pos_data = next((p for p in account['positions'] if p.get('symbol','') == sym), None)
+                if not pos_data:
+                    print(f"  ❌ 止损执行跳过: 未找到持仓 {sym}，当前持仓={[p.get('symbol','') for p in account['positions']]}")
+                    continue
                 if pos_data:
                     shares = int(pos_data.get('shares', 0))
                     market_val = pos_data.get('market_val', 0)
@@ -784,7 +858,7 @@ class AutoTrader:
                         full_sym = sym
                     else:
                         market = 'us'
-                        full_sym = f"US.{sym}"
+                        full_sym = sym if sym.startswith('US.') else f"US.{sym}"
                     
                     # 止损交易跳过LLM分析，直接执行
                     success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True)
@@ -1094,11 +1168,11 @@ if __name__ == '__main__':
                         # 跳过最近尝试过平仓的标的（避免频繁下单）
                         if sym in trader.recently_closed:
                             age = time.time() - trader.recently_closed[sym]
-                            if age < 60:  # 60秒冷却期
+                            if age < 86400:  # 24小时冷却期
                                 print(f"[{now}]   {sym}: 冷却中({age:.0f}s)，跳过")
                                 continue
                         
-                        # pl_ratio已经是百分比形式（如-7.53表示-7.53%），不需要乘100
+                        # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
                         pl_pct = float(pos.get('pl_ratio', 0))
                         market_val = pos.get('market_val', 0)
                         price = market_val / shares if shares > 0 else 0
@@ -1110,7 +1184,7 @@ if __name__ == '__main__':
                             # 检查是否在失败冷却期（避免频繁重试）
                             if sym in trader.recently_closed:
                                 age = time.time() - trader.recently_closed[sym]
-                                if age < 120:  # 失败后等待120秒再重试
+                                if age < 86400:  # 失败后等待24小时再重试
                                     print(f"[{now}]   {sym}: 止损失败冷却中({age:.0f}s)，跳过")
                                     continue
                             
@@ -1120,7 +1194,7 @@ if __name__ == '__main__':
                                 print(f"[{now}]   ✅ 止损完成: {sym}")
                                 trader.recently_closed[sym] = time.time()  # 成功后记录，防止重复平仓
                             else:
-                                print(f"[{now}]   ❌ 止损失败，120秒后重试")
+                                print(f"[{now}]   ❌ 止损失败，24小时后重试")
                                 trader.recently_closed[sym] = time.time()  # 失败后进入长冷却期
                         # 止盈：盈利超过8%
                         elif pl_pct > 8:
@@ -1129,7 +1203,7 @@ if __name__ == '__main__':
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
-                                print(f"[{now}]   ❌ 止盈失败，将在60秒后重试")
+                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
                                 trader.recently_closed[sym] = time.time()
                 
                 # 获取机会

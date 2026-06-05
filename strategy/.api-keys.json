@@ -23,6 +23,7 @@
   },
   "feishu": {
     "appId": "cli_a93b169884f8dcc1",
-    "appSecret": "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+    "appSecret": "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV",
+    "chatId": "oc_f6c5168cb212e624d21ccfabed49b083"
   }
 }
