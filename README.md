@@ -1,7 +1,19 @@
 # Stock 自动交易系统使用文档
 
-> 版本: v2.1  
-> 最后更新: 2026-04-09
+> 版本: v2.2 (四源共振真实评分 + LLM 推理模型修复)  
+> 最后更新: 2026-06-26
+
+## 🆕 v2.2 变更摘要 (2026-06-25 ~ 06-26)
+
+- **四源共振真实评分模块 v1.0** (`strategy/four_source_scorer.py`)
+  - 公告维度：新增 `_announce_news_event`，识别财报 beat / 重大利好(+15) / 重大利空(-10)
+  - 社区维度：美股新增 `_us_public_attention`（Yahoo Finance / Google News / Finnhub），不再只查中文源
+  - 新闻维度：news.db 免底关键词正面情绪 +5
+- **LLM 推理模型 token 修复** (`strategy/llm_stock_analyzer.py`)
+  - 推理模型 (deepseek-v4-pro 等) 自动抬到 800 tokens
+  - `content` 空时从 `reasoning_content` 末尾抽答案，避免误判为调用失败
+- **门槛分级**：交易时段 `min_score=80` 自动下单 / 非交易时段 `opp_alert_score=90` 仅推送
+- **验证案例 MU**：51 → 83 (news 27 / ann 15 / com 20 / inst 24 - LLM 3)
 
 ---
 
@@ -36,8 +48,8 @@ Stock 是一个基于 **四源共振** 策略的自动交易系统，支持港�
 
 | 市场 | 账户 | 策略版本 |
 |------|------|----------|
-| 🇭🇰 港股 | 15270899 (CASH) | v2.1 |
-| 🇺🇸 美股 | 15270898 (MARGIN) | v1.7 |
+| 🇭🇰 港股 | 15270899 (CASH) | v2.1 + 四源共振 v1.0 |
+| 🇺🇸 美股 | 15270898 (MARGIN) | v1.7 + 四源共振 v1.0 + LLM 修复 |
 
 ---
 

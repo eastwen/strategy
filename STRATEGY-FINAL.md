@@ -1,6 +1,7 @@
 # 策略最终版本总结
 
-**更新日期：2026-03-24**
+**更新日期：2026-06-26**
+**当前版本：v2.2（四源共振真实评分 + LLM 推理模型修复）**
 
 ---
 
@@ -9,21 +10,55 @@
 **项目名称：** 模拟盘自动交易 + 每日汇报系统
 
 **核心模块：**
-1. 港股独立策略系统 v2.0（动态调整）
-2. 美股四源共振策略 v1.6（严格择时）
-3. 四源共振系统
-4. 情绪监控系统
-5. 财报预测模块
-6. 定时任务调度
-7. 飞书推送集成
+1. 港股策略 v2.1（独立策略 + 动态调整）
+2. 美股策略 v1.7（严格择时 + 自动交易 v2.1）
+3. **四源共振真实评分模块 v1.0** ⭐ NEW（2026-06-25）
+4. **LLM 智能分析（推理模型 token 修复）** ⭐ NEW（2026-06-26）
+5. 情绪监控系统
+6. 财报预测模块
+7. 定时任务调度
+8. 飞书推送集成
 
 ---
 
-## 🇭🇰 港股策略 v2.0 - 动态调整版
+## 🔥 v2.2 评分链路修复（2026-06-25）
+
+**触发**：MU 财报超预期、股价 +12%，但非交易时段推送零命中，全市场最高分仅 68。
+
+**三个系统级 Bug（全市场受影响）：**
+
+1. **LLM 推理模型 token 截断** (`llm_stock_analyzer.py`)
+   - 推理模型答案走 `reasoning_content`，220 tokens 被 reasoning 吃光 → `content` 空 → 误判调用失败
+   - 修复：推理模型自动抬到 800 tokens；`content` 空时从 `reasoning_content` 末尾抽答案
+
+2. **公告维度漏算财报/重大事件** (`four_source_scorer.py`)
+   - 原 `score_official_announce` 只看 SEC insider trading，全市场财报 beat / 重大公告全不计分
+   - 修复：新增 `_announce_news_event` 读 `data/alerts.json`
+     - 重大利好 高档 +15 (cap=20) / 中档 +9 / 重大利空 -10
+     - news.db 免底 ANNOUNCE 关键词正面情绪 +5
+
+3. **社区维度只查中文源** (`four_source_scorer.py`)
+   - 原仅查新浪/东方财富/36氪，美股个股永远 0/25
+   - 修复：美股新增 `_us_public_attention`（Yahoo Finance / Google News Tech / Finnhub）
+
+**验证结果（MU）**：
+```
+修复前：news 27 / ann  0 / com  0 / inst 24 = 51 → LLM"失败"+0 → 最终 51
+修复后：news 27 / ann 15 / com 20 / inst 24 = 86 → LLM -3       → 最终 83
+```
+
+**门槛决策**：
+- 交易时段 `us_config.min_score = 80`（自动下单）
+- 非交易时段 `us_config.opp_alert_score = 90`（仅推送提醒，不下单）
+
+---
+
+## 🇭🇰 港股策略 v2.1 - 动态调整版
 
 ### 配置文件
 ```
-/home/admin/.openclaw/workspace-arashi/config/hk-strategy-dynamic-v2.0.json
+/home/admin/.openclaw/workspace-stock/config/hk-strategy.json
+/home/admin/.openclaw/workspace-stock/config/hk-strategy-dynamic-v2.1.json
 ```
 
 ### 核心特点
@@ -56,11 +91,12 @@
 
 ---
 
-## 🇺🇸 美股策略 v1.6 - 严格择时版
+## 🇺🇸 美股策略 v1.7 - 严格择时版（搭配四源共振 v1.0）
 
 ### 配置文件
 ```
-/home/admin/.openclaw/workspace-arashi/config/us-strategy-v1.0.json
+/home/admin/.openclaw/workspace-stock/config/us-strategy.json
+/home/admin/.openclaw/workspace-stock/config/us-strategy-v1.7.json
 ```
 
 ### 核心特点
@@ -184,7 +220,7 @@ AppId: cli_a93b169884f8dcc1
 ## 📁 文件结构（当前）
 
 ```
-/home/admin/.openclaw/workspace-arashi/
+/home/admin/.openclaw/workspace-stock/
 ├── 📊 报告生成
 │   ├── comprehensive-report-v12.py    # 日报 ⭐
 │   ├── generate-weekly-report.py      # 周报 ⭐
@@ -261,5 +297,6 @@ AppId: cli_a93b169884f8dcc1
 
 ---
 
-**最终更新：2026-03-24**
-**下次评估：2026-04-24（建议1个月后重新评估行业权重）**
+**最终更新：2026-06-26**
+**当前版本：v2.2（四源共振真实评分 + LLM 推理模型修复）**
+**下次评估：跳过一轮交易日后复盘数据**
