@@ -1,275 +1,203 @@
 {
-  "time": "2026-06-06T03:29:26.235736",
+  "time": "2026-06-26T23:29:31.541809",
   "source": "news_integration",
   "alerts": [
     {
-      "symbol": "",
-      "title": "Trump wants Bill Pulte to fire big chunk of national intelligence office staff: WSJ",
+      "symbol": "MU",
+      "title": "Micron falls 5% as tech stocks struggle - CNBC",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:05.002232",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "AAPL",
+      "title": "Apple stock gets slammed on bigger Mac, iPad price hikes. Why it can weather the storm",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-06-06T01:25:37",
+      "timestamp": "2026-06-26T04:27:58",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "TGT",
+      "title": "We're trimming a health-care stock into strength and raising our price target",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-26T00:35:24",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "MU",
+      "title": "The Club's top 10 things to watch in the stock market Thursday",
+      "source": "Finnhub",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-25T21:11:09",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "AAPL",
+      "title": "Stock Market Weekly Review: S&amp;P 500, Nasdaq Below 50-Day Line; Micron, Apple In Focus",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-26T23:29:02.675262",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "MU",
+      "title": "Stock Market Weekly Review: S&amp;P 500, Nasdaq Below 50-Day Line; Micron, Apple In Focus",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-26T23:29:02.675262",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "NVDA",
+      "title": "Nvidia Stock Falls as Tech Selloff Catches Up With Chips - Barron's",
+      "source": "Google News Tech",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-26T23:29:04.998014",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "00388",
+      "title": "首只！易方达港交所科技100指数ETF上市",
+      "source": "东方财富",
+      "sentiment": 0.5,
+      "timestamp": "2026-06-26T23:29:09.509356",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Trump's 'crazy' rebuke undercuts Netanyahu at a critical moment - Reuters",
+      "title": "Why breakthrough GLP-1 weight loss pills may be a bad thing for employer insurance coverage",
       "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T01:12:52",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Global oil inventories depleted, next price spike could roil economies, markets - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T00:26:41",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran using Lebanon as bargaining chip in US talks, Lebanese president says - Reuters",
-      "source": "Finnhub",
-      "sentiment": 1.0,
-      "timestamp": "2026-06-06T00:23:03",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T22:08:22",
       "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "US says it issued sanctions on network smuggling Iranian LPG - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T00:05:50",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Boeing to start 737 Max production on new assembly line July 6, CEO says",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T23:38:32",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran declares support for Hezbollah with wider peace deal in doubt - Reuters",
+      "title": "As Social Security faces trust fund depletion, some Washington lawmakers call for taxing high earners",
       "source": "Finnhub",
       "sentiment": 1.0,
-      "timestamp": "2026-06-05T22:59:51",
+      "timestamp": "2026-06-26T05:20:56",
+      "importance": "高",
+      "alert_type": "重大利好"
+    },
+    {
+      "symbol": "",
+      "title": "IMF says energy, commodity prices fall after Iran deal but will take time to normalize - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T02:16:12",
       "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "US preparing draft resolution condemning Iran at IAEA, diplomats say - Reuters",
+      "title": "We're locking in triple-digit profits on an AI winner at record highs",
       "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T22:42:15",
-      "importance": "中",
-      "alert_type": "新闻"
+      "sentiment": 1.0,
+      "timestamp": "2026-06-25T23:11:35",
+      "importance": "高",
+      "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "US forces board sanctioned tanker in Indian Ocean, Pentagon says - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T22:14:09",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Jim Cramer's top 10 things to watch in the stock market Friday",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T21:22:07",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Iran says it fired warning missiles and drones at US warships in Gulf of Oman - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-05T20:19:03",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Broadway's $1.9 billion season is the latest sign of consumers splurging on experiences",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T20:00:01",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Family offices bet on sports, from pickleball leagues to smart soccer balls",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T20:00:01",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "No tech, no problem. Dow makes record and traders think these stocks can lead now",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T19:45:23",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "India's economy expands 7.8% over January to March — faster than expected",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T18:57:42",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Middle East conflict pushing millions into hunger, WFP says - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T18:27:48",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "UK house prices fall unexpectedly as market feels Iran war impact - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-05T14:10:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Oman says Mina al Fahal terminal operations normal after reported oil export halt - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T10:38:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Stocks fall as strong jobs data fuels rate hike bets; oil set for weekly gain - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-05T09:35:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Oil prices fall after Oman says Mina al Fahal operations proceeding normally - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-05T08:28:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "1 High-Yield Dividend Stock Under $30 to Buy Hand Over Fist and Hold Forever",
+      "title": "Neogen Gains 101.1% in a Year: What's Driving the Rally?",
       "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205117",
-      "importance": "中",
-      "alert_type": "新闻"
+      "sentiment": 1.0,
+      "timestamp": "2026-06-26T23:29:02.673823",
+      "importance": "高",
+      "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "2 Growth ETFs to Buy and Hold for 20 Years",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205272",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Goldman’s Future Tech ETF Turned $10k Into $15.2k While the S&amp;P 500 Made $1.1k",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205308",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Market Indexes Tumble at Midday as Treasury Yields Spike on Hot Employment Report",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205348",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Tech Stocks Fall. Why Broadcom, Google, AI IPOs May Have Triggered Sell-Off.",
+      "title": "Correction: Exchange-Traded Funds, Equity Futures Decline Pre-Bell Friday as Investors Shift Focus From Middle East to Technology Stocks",
       "source": "Yahoo Finance",
       "sentiment": 0.0,
-      "timestamp": "2026-06-06T03:29:02.205368",
-      "importance": "中",
+      "timestamp": "2026-06-26T23:29:02.676836",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Equities Fall, Yields Jump Intraday After Jobs Report; Tech Leads Sell-Off",
+      "title": "Nasdaq Falls 1%. The Chip Selloff Is Back.",
       "source": "Yahoo Finance",
       "sentiment": 0.0,
-      "timestamp": "2026-06-06T03:29:02.205395",
-      "importance": "中",
+      "timestamp": "2026-06-26T23:29:02.678768",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "If You Want to Buy SpaceX Before the IPO, This ETF Makes It Easier Than You Think",
+      "title": "BankUnited Gains 12.7% So Far in 2026: Should You Buy the Stock Now?",
       "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205413",
-      "importance": "中",
+      "sentiment": 1.0,
+      "timestamp": "2026-06-26T23:29:02.679062",
+      "importance": "高",
+      "alert_type": "重大利好"
+    },
+    {
+      "symbol": "",
+      "title": "Asia stock markets slide as tech shares slump - BBC",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:04.997527",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Coinbase Stock Is Struggling. Why Crypto Trading Could Be Slow to Recover.",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205431",
-      "importance": "中",
+      "title": "Tech stocks live: Tech sells off as OpenAI weighs delaying IPO until 2027 - Yahoo Finance",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:04.998713",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Yes, Stocks Were Volatile This Week. Stay Invested.",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205447",
-      "importance": "中",
+      "title": "Tech stocks tumble on concerns over AI spending - BBC",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:04.999168",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Trump says ‘stocks should go up, not down’ amid market slump",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-06T03:29:02.205461",
-      "importance": "中",
+      "title": "Wall Street stocks drop in tech sell-off – latest updates - The Telegraph",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:04.999649",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "AI stock slump raises the question if investors are just taking profits or getting very nervous - AP News",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:05.000606",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "AI stocks melt down again. What’s going on? - CNN",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-06-26T23:29:05.002599",
+      "importance": "高",
       "alert_type": "新闻"
     }
   ]

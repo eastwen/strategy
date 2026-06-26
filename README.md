@@ -220,7 +220,7 @@ python3 daily-report-to-feishu.py --us
 
 ### 策略配置
 
-**港股策略** (`config/hk-strategy-dynamic-v2.1.json`):
+**港股策略** (`config/hk-strategy.json`):
 ```json
 {
   "version": "2.1",
@@ -232,7 +232,7 @@ python3 daily-report-to-feishu.py --us
 }
 ```
 
-**美股策略** (`config/us-strategy-v1.7.json`):
+**美股策略** (`config/us-strategy.json`):
 ```json
 {
   "version": "1.7",
@@ -247,11 +247,11 @@ python3 daily-report-to-feishu.py --us
 
 ### 交易时间配置
 
-**港股** (`config/hk-trading-hours.json`):
+**港股** (已在 `strategy/auto-trader.py` 中硬编码)：
 - 交易时间: 09:30-16:00
 - 午休: 12:00-13:00
 
-**美股** (`config/us-trading-hours.json`):
+**美股** (已在 `strategy/auto-trader.py` 中硬编码)：
 - 盘前: 04:00-09:30
 - 盘中: 09:30-16:00
 - 盘后: 16:00-20:00

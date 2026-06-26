@@ -245,7 +245,7 @@
 │   ├── data/
 │   │   ├── trades.json                   # 港股交易记录
 │   │   ├── trades-us.json                # 美股交易记录
-│   │   ├── opportunities.json            # 交易信号
+│   │   ├── us-opportunities.json         # 美股交易信号
 │   │   ├── earnings-forecast-*.json      # 财报预测结果
 │   │   └── sentiment-3day-*.json         # 情绪预测结果
 │   └── daily-reports/                    # 日报存档

@@ -37,7 +37,7 @@ def test_news_integration():
         print(f"❌ 数据库错误: {e}")
     
     # 2. 检查交易机会
-    opp_file = '/home/admin/.openclaw/workspace-stock/data/opportunities.json'
+    opp_file = '/home/admin/.openclaw/workspace-stock/data/us-opportunities.json'
     try:
         with open(opp_file, 'r') as f:
             data = json.load(f)

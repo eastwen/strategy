@@ -1,5 +1,37 @@
 # OpenClaw Long-term Memory
 
+## 2026-06-25 评分链路修复 (MU 调查)
+
+**背景**：MU 财报超预期、股价跳涨 12%，但非交易时段推送零命中，5251 只美股扫完最高分只到 68。
+
+**三个真问题**：
+
+1. **LLM “调用失败”是假象** — deepseek-v4-pro 是推理模型，回答走 `reasoning_content`；max_tokens=220 被 reasoning 吃光 → `content` 空串 → 错误当成”调用失败”走 fallback +0。
+   - 修复 (`llm_stock_analyzer.py`)：`_try_one` 检测推理模型名自动抬到 800；`content` 空时从 `reasoning_content` 末尾抽答案。
+
+2. **四源公告维度丢事件** — `score_official_announce` 只看 SEC insider trading，财报 beat / 重大公告 全不计分。
+   - 修复 (`four_source_scorer.py`)：新增 `_announce_news_event`，读 `data/alerts.json` 的 `重大利好/高` 满档加 15 (cap=20)、中档加 9、重大利空减 10；同时 news.db 免底 ANNOUNCE关键词+正面情绪加 5。
+
+3. **社区维度只查中文源** — `score_community` 查新浪/东方财富/36氪，美股个股套不上，永远 0/25。
+   - 修复 (`four_source_scorer.py`)：`_us_public_attention` 免底，查 Yahoo Finance / Google News Tech / Finnhub。
+
+**验证结果 (MU)**：
+```
+修复前: news 27 / ann 0 / com 0 / inst 24 = 51 → LLM“调用失败”+0 → 最终 51
+修复后: news 27 / ann 15 / com 20 / inst 24 = 86 → LLM -3 (量能未放大) → 最终 83
+```
+
+**门槛决策**：
+- 交易时段 `us_config.min_score = 80`（走自动下单）
+- 非交易时段 `us_config.opp_alert_score = 90`（走推送提醒、不下单）
+  - east 决策：凌晨别被中等机会吵醒，高门槛保留
+
+**下一步**：下轮 us-scanner cron 跳到时验证：MU 能不能走上 80+ 进入交易机会列表。
+
+---
+
+# OpenClaw Long-term Memory
+
 ## Project: 模拟盘自动交易 + 每日汇报系统
 
 **Status:** 运行中 ✅
@@ -16,12 +48,13 @@
 | (旧)18615636 | 融资账户 | 历史账户（已过期） |
 | (旧)18615635 | 融资账户 | 历史账户（已过期） |
 
-**当前状态（2026-03-27）：**
-- **活跃账户**: 15270898 (MARGIN类型)
-- **总资产**: $1,010,207.67
-- **现金**: $889,361.95 (88.0%)
-- **证券市值**: $120,845.72 (12.0%)
-- **持仓**: US.COP (908股, 浮亏-9.01%)
+**当前状态：每次回答前必须 cat data/trades.json 实时读取，不要凭记忆！**
+- **活跃账户**: 15270898 (MARGIN, 美股) + 15270899 (CASH, 港股)
+- 持仓快照会变化，禁止引用旧持仓（如 US.COP 已不存在）
+
+## ⚠️ 用户铁律（2026-06-10 east 强调）
+**任何关于持仓/账户/系统状态/行情的问题，先去读 data/ 下的实时文件，再回答。**
+**不要用 MEMORY.md 里的历史快照糊弄用户。被抓到一次就是忽悠。**
 
 **数据同步方式：**
 ```bash

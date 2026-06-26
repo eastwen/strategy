@@ -873,6 +873,71 @@ class StableNewsSources:
         }
         return cik_map.get(symbol, '')
     
+    # 港股公司名/简称 → 港股代码映射 (2026-06-18 east 修复 BUG 1)
+    # 注意：news.db.stock_mentions 的 symbol 不带 HK. 前缀，统一存 5 位数字
+    HK_COMPANY_TO_SYMBOL = {
+        # 互联网科技
+        '腾讯': '00700', '腾讯控股': '00700', 'tencent': '00700',
+        '阿里巴巴': '09988', '阿里': '09988', 'alibaba': '09988',
+        '美团': '03690', 'meituan': '03690',
+        '京东': '09618', 'jd.com': '09618', 'jd集团': '09618',
+        '小米': '01810', '小米集团': '01810', 'xiaomi': '01810',
+        '快手': '01024', 'kuaishou': '01024',
+        '网易': '09999', 'netease': '09999',
+        '百度': '09888', 'baidu': '09888',
+        '商汤': '00020', 'sensetime': '00020',
+        '哔哩哔哩': '09626', 'b站': '09626', 'bilibili': '09626',
+        # 金融
+        '汇丰': '00005', '汇丰控股': '00005', 'hsbc': '00005',
+        '友邦': '01299', '友邦保险': '01299', 'aia': '01299',
+        '建设银行': '00939', '建行': '00939',
+        '工商银行': '01398', '工行': '01398',
+        '中国银行': '03988', '中行': '03988',
+        '招商银行': '03968', '招行': '03968',
+        '中国平安': '02318', '平安': '02318',
+        '香港交易所': '00388', '港交所': '00388',
+        # 新能源/汽车
+        '比亚迪股份': '01211', '比亚迪': '01211',
+        '小鹏汽车': '09868', '小鹏': '09868',
+        '蔚来': '09866',
+        '理想汽车': '02015', '理想': '02015',
+        '吉利汽车': '00175', '吉利': '00175',
+        '长城汽车': '02333',
+        '宁德时代': '03750',  # CATL 港股
+        # 消费
+        '李宁': '02331',
+        '安踏': '02020', '安踏体育': '02020',
+        '蒙牛': '02319', '蒙牛乳业': '02319',
+        '海底捞': '06862',
+        '农夫山泉': '09633',
+        '康师傅': '00322',
+        # 医药
+        '药明生物': '02269',
+        '药明康德': '02359',
+        '石药': '01093', '石药集团': '01093',
+        '百济神州': '06160',
+        '信达生物': '01801',
+        # 能源/资源
+        '中海油': '00883', '中国海洋石油': '00883',
+        '中石油': '00857', '中国石油': '00857',
+        '中石化': '00386', '中国石化': '00386',
+        # 地产
+        '新鸿基': '00016', '新鸿基地产': '00016',
+        '长实': '01113', '长实集团': '01113',
+        '万科': '02202',  # 万科企业H股
+        # 公用事业 / 电信
+        '中移动': '00941', '中国移动': '00941',
+        '中电信': '00728', '中国电信': '00728',
+        '中联通': '00762', '中国联通': '00762',
+        '中电': '00002', '中电控股': '00002',
+        # 其他常见
+        '招金矿业': '01818',
+        '紫金矿业': '02899',
+        '复星医药': '02196',
+        '中信证券': '06030',
+        '海螺水泥': '00914',
+    }
+
     # 公司名到股票代码映射
     COMPANY_TO_SYMBOL = {
         'apple': 'AAPL', 'alphabet': 'GOOGL', 'google': 'GOOGL',
@@ -912,36 +977,127 @@ class StableNewsSources:
     }
     
     def extract_stocks(self, text: str) -> List[str]:
-        """提取股票代码"""
+        """提取股票代码（美股 + 港股 5 位数字代码）
+
+        2026-06-18 east 修复 BUG 1：补充港股识别
+        - 港股代码统一存裸 5 位数字（不带 HK. 前缀），与美股保持一致
+        - 识别来源：HK.xxxxx / xxxxx.HK / (xxxxx.HK) / 港股公司名
+        """
         if not text:
             return []
-        # 美股代码格式 ($SYMBOL)
-        stocks = re.findall(r'\$([A-Z]{1,5})\b', text)
+        stocks = []
         text_lower = text.lower()
+
+        # === 美股 ===
+        # 美股代码格式 ($SYMBOL)
+        stocks.extend(re.findall(r'\$([A-Z]{1,5})\b', text))
         # 公司名匹配
         for name, symbol in self.COMPANY_TO_SYMBOL.items():
             if name in text_lower:
                 stocks.append(symbol)
         # 纯代码匹配（标题中直接出现的ticker如"AVGO surged"）
-        words = re.findall(r'\b([A-Z]{2,5})\b', text)
-        for word in words:
+        for word in re.findall(r'\b([A-Z]{2,5})\b', text):
             if word in self.COMMON_TICKERS and word not in stocks:
                 stocks.append(word)
-        return list(set(stocks))[:5]
+
+        # === 港股 (5 位数字, 不带前缀) ===
+        # 有效港股正股范围: 00001-09999 (主板正股) | 80000-89999 (指数/ETF)
+        # 1xxxx-7xxxx 是窝轮/牛熊证/结构化产品，不计入
+        def _is_valid_hk(code: str) -> bool:
+            if not code.isdigit() or not (4 <= len(code) <= 5):
+                return False
+            n = int(code)
+            return (1 <= n <= 9999) or (80000 <= n <= 89999)
+
+        hk_candidates = []
+        # 1) HK.00700 / HK.700  → 标准化为 5 位
+        for m in re.findall(r'HK[.\-]\s*(\d{1,5})', text, re.IGNORECASE):
+            hk_candidates.append(m)
+        # 2) 00700.HK / 0700.HK / (00700.HK)  → 5 位
+        for m in re.findall(r'\b(\d{1,5})\s*\.\s*HK\b', text, re.IGNORECASE):
+            hk_candidates.append(m)
+        # 3) 港股代码常见写法："港股00700" / "港股代码：00700" / "（00700）"
+        for m in re.findall(r'(?:港股|代码[:：]?|（|\()\s*(\d{4,5})\s*(?:）|\)|HK)?', text):
+            hk_candidates.append(m)
+        # 过滤 + 统一補 0
+        for m in hk_candidates:
+            if _is_valid_hk(m):
+                stocks.append(m.zfill(5))
+        # 4) 港股公司名匹配
+        for name, symbol in self.HK_COMPANY_TO_SYMBOL.items():
+            if name in text_lower or name in text:  # 中文不区分大小写
+                stocks.append(symbol)
+
+        # 去重 + 限制数量
+        seen = set()
+        result = []
+        for s in stocks:
+            if s and s not in seen:
+                seen.add(s)
+                result.append(s)
+        return result[:8]
     
+    # ===== 情绪关键词词典 (v2 - 2026-06-16 扩词典) =====
+    # 英文使用 \b 词边界正则，避免 "cut" 误匹配 "execute"、"up" 误匹配 "support" 等
+    # 中文用 substring 匹配（中文无词边界）
+    BULLISH_EN = [
+        'bull', 'bullish', 'rise', 'rises', 'rising', 'rose',
+        'up', 'gain', 'gains', 'gained', 'positive', 'beat', 'beats',
+        'surge', 'surges', 'surged', 'soar', 'soars', 'soared',
+        'jump', 'jumps', 'jumped', 'rally', 'rallies', 'rallied',
+        'upgrade', 'upgraded', 'breakout', 'record', 'high', 'highs',
+        'outperform', 'buyback', 'partnership', 'approval', 'approved',
+    ]
+    BEARISH_EN = [
+        'bear', 'bearish', 'drop', 'drops', 'dropped',
+        'down', 'loss', 'losses', 'negative', 'miss', 'misses', 'missed',
+        'fall', 'falls', 'fell', 'decline', 'declines', 'declined',
+        # ↓↓↓ 2026-06-16 新增利空词 ↓↓↓
+        'sell', 'sells', 'sold', 'cut', 'cuts',
+        'downgrade', 'downgraded', 'probe', 'probes',
+        'lawsuit', 'sue', 'sues', 'sued',
+        'warn', 'warns', 'warned', 'warning',
+        'recall', 'recalls', 'recalled',
+        'layoff', 'layoffs', 'fraud', 'investigation',
+        'bankruptcy', 'bankrupt', 'crash', 'plunge', 'plunges',
+        'slump', 'slumps', 'tumble', 'tumbles',
+    ]
+    BULLISH_CN = [
+        '上涨', '大涨', '飙升', '走高', '突破', '创新高', '反弹',
+        '利好', '增持', '回购', '上调', '超预期', '看多', '看涨',
+        '强劲', '盈利', '扭亏', '中标', '获批',
+    ]
+    BEARISH_CN = [
+        '下跌', '大跌', '跳水',
+        # ↓↓↓ 2026-06-16 新增中文利空词 ↓↓↓
+        '利空', '下调', '警示', '暴跌', '亏损', '裁员', '调查', '违规',
+        '减持', '看空', '看跌', '诉讼', '处罚', '退市', '停牌',
+        '腰斩', '跌停', '低于预期', '不及预期', '召回', '欺诈',
+    ]
+
     def analyze_sentiment(self, text: str) -> float:
-        """情绪分析"""
+        """情绪分析 (v2: 词边界匹配 + 中英文双词典)
+
+        英文用 \b...\b 词边界，避免 substring 误判（cut/execute, up/support 等）。
+        中文直接 substring，因为中文无词边界。
+        """
         if not text:
             return 0.5
-        
+
         text_lower = text.lower()
-        bullish = sum(1 for word in ['bull', 'rise', 'up', 'gain', 'positive', 'beat', 'surge', 'soar'] if word in text_lower)
-        bearish = sum(1 for word in ['bear', 'drop', 'down', 'loss', 'negative', 'miss', 'fall', 'decline'] if word in text_lower)
-        
+
+        # 英文：词边界匹配
+        bullish = sum(1 for w in self.BULLISH_EN if re.search(r'\b' + re.escape(w) + r'\b', text_lower))
+        bearish = sum(1 for w in self.BEARISH_EN if re.search(r'\b' + re.escape(w) + r'\b', text_lower))
+
+        # 中文：substring 匹配
+        bullish += sum(1 for w in self.BULLISH_CN if w in text)
+        bearish += sum(1 for w in self.BEARISH_CN if w in text)
+
         total = bullish + bearish
         if total == 0:
             return 0.5
-        
+
         return round(bullish / total, 2)
 
 # ========== 定时任务管理器 ==========
@@ -1069,20 +1225,64 @@ class NewsScheduler:
             print(f"  ℹ️ 没有超过15天的旧新闻需要清理")
         
         # 同步警报到alerts.json（用于心跳检查）
+        # 2026-06-18 east 修复 BUG 5：写入具体 symbol 让 "重大利空触发分级减仓" 能够生效
         try:
             import json
+            extractor = StableNewsSources()
             alerts = []
-            for n in all_news[:30]:  # 只取最近30条
-                alerts.append({
-                    'symbol': '',
-                    'title': n.get('title', ''),
-                    'source': n.get('source', ''),
-                    'sentiment': n.get('sentiment', 0.5),
-                    'timestamp': n.get('timestamp', datetime.now().isoformat()),
-                    'importance': '高' if n.get('sentiment', 0.5) > 0.7 else '中' if n.get('sentiment', 0.5) < 0.3 else '中',
-                    'alert_type': '新闻'
-                })
+            # 1. 全局重要新闻 (使用原逻辑)
+            for n in all_news[:50]:
+                title = n.get('title', '')
+                content = n.get('content', '')
+                sentiment = n.get('sentiment', 0.5)
+                # 提取 symbol
+                syms = extractor.extract_stocks((title or '') + ' ' + (content or '')[:300])
+                # 计算重要性
+                is_high = (
+                    sentiment <= 0.2 or sentiment >= 0.8
+                    or any(kw in title for kw in ['重大利空', '重大利好', '人事地震', '调查', '诉讼',
+                                                   '召回', '减持', '裁员', '欺诈', '退市', '停牌',
+                                                   '超预期', '全面发布'])
+                    or any(kw in title.lower() for kw in ['lawsuit', 'probe', 'recall', 'fraud',
+                                                          'bankruptcy', 'crash', 'plunge'])
+                )
+                importance = '高' if is_high else '中'
+                # 重大利空识别
+                is_negative_major = (
+                    is_high and sentiment <= 0.3
+                    and any(kw in title for kw in ['重大利空', '被调查', '诉讼', '缚费', '警示',
+                                                   '欺诈', '退市', '裁员', '下调', '低于预期'])
+                )
+                alert_type = '重大利空' if is_negative_major else '重大利好' if (is_high and sentiment >= 0.7) else '新闻'
+                if syms:
+                    # 有个股命中，为每个 symbol 各存一条
+                    for sym in syms[:3]:  # 最多取前 3 个 symbol
+                        alerts.append({
+                            'symbol': sym,
+                            'title': title,
+                            'source': n.get('source', ''),
+                            'sentiment': sentiment,
+                            'timestamp': n.get('timestamp', datetime.now().isoformat()),
+                            'importance': importance,
+                            'alert_type': alert_type,
+                        })
+                else:
+                    # 没命中个股记录为市场新闻 (只抽高重要性的记录)
+                    if is_high:
+                        alerts.append({
+                            'symbol': '',
+                            'title': title,
+                            'source': n.get('source', ''),
+                            'sentiment': sentiment,
+                            'timestamp': n.get('timestamp', datetime.now().isoformat()),
+                            'importance': importance,
+                            'alert_type': alert_type,
+                        })
             
+            # 限制总数为 100 条（有 symbol 优先）
+            alerts.sort(key=lambda a: (0 if a.get('symbol') else 1, 0 if a.get('importance')=='高' else 1))
+            alerts = alerts[:100]
+
             data = {
                 'time': datetime.now().isoformat(),
                 'source': 'news_integration',
@@ -1092,7 +1292,8 @@ class NewsScheduler:
             with open('/home/admin/.openclaw/workspace-stock/data/alerts.json', 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
-            print(f"\n🔔 已同步 {len(alerts)} 条警报到 alerts.json")
+            sym_count = sum(1 for a in alerts if a.get('symbol'))
+            print(f"\n🔔 已同步 {len(alerts)} 条警报到 alerts.json (个股命中 {sym_count} 条)")
         except Exception as e:
             print(f"\n⚠️  同步警报失败: {e}")
         

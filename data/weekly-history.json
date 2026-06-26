@@ -13,5 +13,50 @@
       }
     },
     "closed_trades": 0
+  },
+  "2026-06-06": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1227702.368,
+        "cash": 773804.948,
+        "position_value": 453897.42
+      },
+      "15270899": {
+        "total_asset": 999895.832,
+        "cash": 971779.832,
+        "position_value": 28116.0
+      }
+    },
+    "closed_trades": 0
+  },
+  "2026-06-13": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1235322.806,
+        "cash": -40.204,
+        "position_value": 1235363.01
+      },
+      "15270899": {
+        "total_asset": 998927.374,
+        "cash": 864956.374,
+        "position_value": 133971.0
+      }
+    },
+    "closed_trades": 3
+  },
+  "2026-06-20": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1262970.262,
+        "cash": 65569.992,
+        "position_value": 1197400.27
+      },
+      "15270899": {
+        "total_asset": 990150.751,
+        "cash": 913150.751,
+        "position_value": 77000.0
+      }
+    },
+    "closed_trades": 19
   }
 }

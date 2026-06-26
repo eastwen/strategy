@@ -33,7 +33,7 @@ strategy/
   - 自动调整交易评分（±15分）
   - 重大新闻实时警报
   - 市场情绪分析
-  - 更新opportunities.json
+  - 更新us-opportunities.json
 - **使用**：
   ```bash
   python3 news_integration.py --full     # 完整整合
@@ -76,7 +76,7 @@ strategy/
 ## 📊 数据流程
 ```
 国内新闻 → 国际新闻 → 新闻数据库 → 策略整合 → 交易决策
-(simple_chinese_news.py) (news_pipeline.py)  (news.db)   (news_integration.py) (opportunities.json)
+(simple_chinese_news.py) (news_pipeline.py)  (news.db)   (news_integration.py) (us-opportunities.json)
 ```
 
 ## 🗑️ 已删除的重复文件

@@ -17,17 +17,6 @@
     "peak_time": "2026-04-08T15:56:40.771409"
   },
   {
-    "symbol": "US.AVGO",
-    "shares": 383,
-    "entry_price": 333.97,
-    "entry_time": "2026-04-08T21:46:36.833156",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T21:46:36.833599"
-  },
-  {
     "symbol": "US.UNH",
     "shares": 416,
     "entry_price": 307.73,
@@ -107,5 +96,257 @@
     "entry_reasons": [],
     "peak_pnl_pct": 0.0,
     "peak_time": "2026-04-09T00:46:43.084053"
+  },
+  {
+    "symbol": "US.PG",
+    "shares": 259,
+    "entry_price": 146.54,
+    "entry_time": "2026-06-08T21:30:09.174190",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ RSI=59.6<65，可入场",
+      "⚠️ 成交量仅1.3倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 5.136397993540851,
+    "peak_time": "2026-06-25T00:25:04.247870"
+  },
+  {
+    "symbol": "US.AMPH",
+    "shares": 6,
+    "entry_price": 19.74,
+    "entry_time": "2026-06-08T21:30:13.029408",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "⚠️ RSI=77.1≥65，不建议入场",
+      "⚠️ 成交量仅0.9倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 4.493526275704493,
+    "peak_time": "2026-06-10T23:15:02.772754"
+  },
+  {
+    "symbol": "US.GE",
+    "shares": 1,
+    "entry_price": 328.35,
+    "entry_time": "2026-06-12T03:15:11.892096",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20>MA50上升趋势 (MA20=311.92, MA50=301.97)",
+      "⚠️ RSI=66.6≥65，不建议入场",
+      "⚠️ 成交量仅0.5倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 5.270191466614832,
+    "peak_time": "2026-06-15T22:15:03.014531"
+  },
+  {
+    "symbol": "US.ACET",
+    "shares": 15350,
+    "entry_price": 8.08,
+    "entry_time": "2026-06-13T02:45:09.126700",
+    "market": "us",
+    "entry_score": 92,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20>MA50上升趋势 (MA20=7.95, MA50=7.84)",
+      "✅ RSI=49.6<65，可入场",
+      "⚠️ 成交量仅0.8倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 7.195121951219513,
+    "peak_time": "2026-06-25T21:00:05.410451"
+  },
+  {
+    "symbol": "US.BIOA",
+    "shares": 10,
+    "entry_price": 17.86,
+    "entry_time": "2026-06-13T03:30:09.686866",
+    "market": "us",
+    "entry_score": 93,
+    "entry_reasons": [
+      "评分85分",
+      "✅ RSI=57.3<65，可入场",
+      "⚠️ 成交量仅0.8倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 6.176305446378439,
+    "peak_time": "2026-06-15T23:15:03.016453"
+  },
+  {
+    "symbol": "US.V",
+    "shares": 430,
+    "entry_price": 333.12,
+    "entry_time": "2026-06-17T21:35:39.903644",
+    "market": "us",
+    "entry_score": 100,
+    "entry_reasons": [
+      "评分100分",
+      "✅ MA20>MA50上升趋势 (MA20=324.69, MA50=320.46)",
+      "✅ RSI=59.0<65，可入场",
+      "⚠️ 成交量仅0.0倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 1.1465157832042883,
+    "peak_time": "2026-06-25T22:25:03.722336"
+  },
+  {
+    "symbol": "HK.00291",
+    "shares": 1000,
+    "entry_price": 21.8,
+    "entry_time": "2026-06-18T14:55:53.758652",
+    "market": "hk",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=55.7在35-70区间",
+      "⚠️ 成交量仅1.4倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.1833180568285976,
+    "peak_time": "2026-06-19T09:30:03.959146"
+  },
+  {
+    "symbol": "US.INTC",
+    "shares": 1052,
+    "entry_price": 121.1,
+    "entry_time": "2026-06-18T21:35:31.210966",
+    "market": "us",
+    "entry_score": 89,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20>MA50上升趋势 (MA20=116.36, MA50=101.43)",
+      "✅ RSI=61.1<65，可入场",
+      "⚠️ 成交量仅0.3倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 4.947101773208165,
+    "peak_time": "2026-06-23T03:25:04.283785"
+  },
+  {
+    "symbol": "HK.00027",
+    "shares": 1000,
+    "entry_price": 29.58,
+    "entry_time": "2026-06-22T10:51:19.540024",
+    "market": "hk",
+    "entry_score": 86,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=44.8在35-70区间",
+      "⚠️ 成交量仅1.2倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 2.0960108181203516,
+    "peak_time": "2026-06-25T09:30:04.873462"
+  },
+  {
+    "symbol": "HK.00300",
+    "shares": 300,
+    "entry_price": 82.9,
+    "entry_time": "2026-06-22T14:51:14.041921",
+    "market": "hk",
+    "entry_score": 86,
+    "entry_reasons": [
+      "评分87分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=57.4在35-70区间",
+      "⚠️ 成交量仅0.8倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.30156815440289503,
+    "peak_time": "2026-06-22T15:20:04.586771"
+  },
+  {
+    "symbol": "HK.00267",
+    "shares": 2000,
+    "entry_price": 12.16,
+    "entry_time": "2026-06-23T15:53:17.875389",
+    "market": "hk",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分86分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=65.2在35-70区间",
+      "⚠️ 成交量仅0.8倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.8223684210526315,
+    "peak_time": "2026-06-24T09:30:04.540127"
+  },
+  {
+    "symbol": "US.IRM",
+    "shares": 635,
+    "entry_price": 131.86,
+    "entry_time": "2026-06-23T21:30:35.493789",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20>MA50上升趋势 (MA20=126.34, MA50=123.02)",
+      "✅ RSI=59.9<65，可入场",
+      "⚠️ 成交量仅1.3倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 2.619084086383826,
+    "peak_time": "2026-06-24T21:00:05.447531"
+  },
+  {
+    "symbol": "US.TPR",
+    "shares": 448,
+    "entry_price": 149.2,
+    "entry_time": "2026-06-23T21:36:03.357245",
+    "market": "us",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分85分",
+      "✅ MA20>MA50上升趋势 (MA20=143.54, MA50=142.15)",
+      "✅ RSI=61.6<65，可入场",
+      "⚠️ 成交量仅0.0倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 3.735063161488563,
+    "peak_time": "2026-06-24T22:25:03.903366"
+  },
+  {
+    "symbol": "HK.00285",
+    "shares": 1000,
+    "entry_price": 22.12,
+    "entry_time": "2026-06-24T09:55:28.532076",
+    "market": "hk",
+    "entry_score": 85,
+    "entry_reasons": [
+      "评分90分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=59.9在35-70区间",
+      "⚠️ 成交量仅0.9倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.45207956600361665,
+    "peak_time": "2026-06-24T14:25:04.004371"
+  },
+  {
+    "symbol": "HK.00688",
+    "shares": 2000,
+    "entry_price": 12.76,
+    "entry_time": "2026-06-24T11:56:44.423942",
+    "market": "hk",
+    "entry_score": 86,
+    "entry_reasons": [
+      "评分86分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=65.2在35-70区间",
+      "⚠️ 成交量仅0.8倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.8620689655172413,
+    "peak_time": "2026-06-24T13:25:03.810121"
   }
 ]

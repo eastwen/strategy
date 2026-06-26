@@ -24,7 +24,7 @@ class USOptimizer:
     def get_data(self):
         data = {}
         
-        config_path = os.path.join(self.config_dir, 'us-strategy-v1.7.json')
+        config_path = os.path.join(self.config_dir, 'us-strategy.json')
         try:
             with open(config_path, 'r') as f:
                 data['config'] = json.load(f)

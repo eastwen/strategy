@@ -62,29 +62,114 @@ class HKMarketSentiment:
         return None
     
     def get_capital_flow(self):
-        """获取港股通资金流向"""
+        """获取港股资金流向（2026-06-18 修复）
+
+        原 BUG：get_capital_flow('HK.800000') 返回 "只支持正股/窝轮/基金"错误
+        修复：用 get_capital_distribution 逐只拉取恒指 10 大权重股，累加净流入
+        返回：单位亿港元（正=净流入, 负=净流出）
+        """
+        # 恒生指数 10 大权重股（按资金权重）
+        weights = [
+            'HK.00700',  # 腾讯
+            'HK.09988',  # 阿里
+            'HK.00005',  # 汇丰
+            'HK.01299',  # 友邦
+            'HK.03690',  # 美团
+            'HK.02318',  # 平安
+            'HK.00939',  # 建行
+            'HK.00388',  # 港交所
+            'HK.00941',  # 中移动
+            'HK.00883',  # 中海油
+        ]
         try:
-            # 恒生指数成分股资金流向
-            ret, data = self.quote_ctx.get_capital_flow('HK.800000')  # 恒生指数
-            if ret == RET_OK and data is not None:
-                # 获取主要流入/流出
-                if 'main_flow' in data.columns:
-                    main_flow = data['main_flow'].sum() if len(data) > 0 else 0
-                    self.capital_flow = main_flow
-                    return main_flow
+            total_in = 0.0
+            total_out = 0.0
+            ok_count = 0
+            for sym in weights:
+                ret, data = self.quote_ctx.get_capital_distribution(sym)
+                if ret != RET_OK or data is None or len(data) == 0:
+                    continue
+                row = data.iloc[0]
+                in_v = (
+                    float(row.get('capital_in_super', 0) or 0)
+                    + float(row.get('capital_in_big', 0) or 0)
+                    + float(row.get('capital_in_mid', 0) or 0)
+                    + float(row.get('capital_in_small', 0) or 0)
+                )
+                out_v = (
+                    float(row.get('capital_out_super', 0) or 0)
+                    + float(row.get('capital_out_big', 0) or 0)
+                    + float(row.get('capital_out_mid', 0) or 0)
+                    + float(row.get('capital_out_small', 0) or 0)
+                )
+                total_in += in_v
+                total_out += out_v
+                ok_count += 1
+            if ok_count >= 5:
+                net_flow = (total_in - total_out) / 1e8
+                self.capital_flow = net_flow
+                self._capital_flow_detail = {
+                    'in_total': total_in / 1e8,
+                    'out_total': total_out / 1e8,
+                    'net': net_flow,
+                    'sample_size': ok_count,
+                    'note': '基于恒指 10 大权重股资金分布累加',
+                }
+                return net_flow
+            else:
+                print(f"资金流向取数不足：仅{ok_count}只成功")
         except Exception as e:
             print(f"获取资金流向失败: {e}")
         return None
-    
+
     def get_warrant_ratio(self):
-        """获取牛熊证比例"""
+        """获取港股多空资金比（2026-06-18 修复）
+
+        原 BUG：get_warrant() 缺少 req 参数，data 返回 tuple 未解包
+        修复：用 Request 分别查 BULL+CALL / BEAR+PUT，按成交额计算比例
+        返回：BULL_CALL成交额 / BEAR_PUT成交额  > 1 看多, < 1 看空
+        """
         try:
-            # 获取恒生指数的牛熊证
-            ret, data = self.quote_ctx.get_warrant('HK.800000')
-            # 注意：data可能是tuple或其他格式，这里简化处理
-            if ret != RET_OK:
+            from futu import WrtType
+            from futu.quote.quote_get_warrant import Request
+
+            def _sum_turnover(types):
+                total = 0.0
+                begin = 0
+                while True:
+                    req = Request()
+                    req.begin = begin
+                    req.num = 200
+                    req.stock_owner = 'HK.800000'
+                    req.type_list = types
+                    ret, data = self.quote_ctx.get_warrant('HK.800000', req=req)
+                    if not isinstance(data, tuple):
+                        return None
+                    df, has_more, _total = data
+                    if df is None or len(df) == 0:
+                        break
+                    total += float(df['turnover'].fillna(0).sum())
+                    if not has_more:
+                        break
+                    begin += len(df)
+                    if begin >= 1000:
+                        break
+                return total
+
+            bull = _sum_turnover([WrtType.BULL, WrtType.CALL])
+            bear = _sum_turnover([WrtType.BEAR, WrtType.PUT])
+            if bull is None or bear is None or bear <= 0:
+                print(f"牛熊证取数不完整: bull={bull}, bear={bear}")
                 return None
-            # 如果获取失败，跳过
+            ratio = round(bull / bear, 3)
+            self.bull_bear_ratio = ratio
+            self._warrant_detail = {
+                'bull_call_turnover': bull,
+                'bear_put_turnover': bear,
+                'ratio': ratio,
+                'note': '多头(BULL+CALL) ÷ 空头(BEAR+PUT) 成交额比；>1 看多, <1 看空',
+            }
+            return ratio
         except Exception as e:
             print(f"获取牛熊证失败: {e}")
         return None
@@ -125,8 +210,9 @@ class HKMarketSentiment:
         
         # 获取资金流向
         flow = self.get_capital_flow()
-        if flow:
+        if flow is not None:
             sentiment['capital_flow'] = flow
+            sentiment['capital_flow_detail'] = getattr(self, '_capital_flow_detail', None)
             if flow >= 50:  # 亿港元
                 sentiment['flow_sentiment'] = '大流入'
                 sentiment['flow_score'] = 80
@@ -136,23 +222,30 @@ class HKMarketSentiment:
             elif flow >= -20:
                 sentiment['flow_sentiment'] = '中性'
                 sentiment['flow_score'] = 50
-            else:
+            elif flow >= -50:
                 sentiment['flow_sentiment'] = '流出'
                 sentiment['flow_score'] = 35
+            else:
+                sentiment['flow_sentiment'] = '大流出'
+                sentiment['flow_score'] = 20
         
         # 获取牛熊证比例
         ratio = self.get_warrant_ratio()
-        if ratio:
+        if ratio is not None:
             sentiment['bull_bear_ratio'] = ratio
+            sentiment['warrant_detail'] = getattr(self, '_warrant_detail', None)
             if ratio >= 1.5:
                 sentiment['warrant_sentiment'] = '看多'
                 sentiment['warrant_score'] = 75
             elif ratio >= 1.0:
                 sentiment['warrant_sentiment'] = '中性'
                 sentiment['warrant_score'] = 50
+            elif ratio >= 0.7:
+                sentiment['warrant_sentiment'] = '偏空'
+                sentiment['warrant_score'] = 35
             else:
                 sentiment['warrant_sentiment'] = '看空'
-                sentiment['warrant_score'] = 30
+                sentiment['warrant_score'] = 20
         
         # 计算综合情绪评分
         scores = []

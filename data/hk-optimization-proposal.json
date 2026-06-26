@@ -1,21 +1,29 @@
 {
-  "timestamp": "2026-04-08T17:00:05.421496",
+  "timestamp": "2026-06-26T17:01:16.651102",
   "proposals": [
     {
-      "type": "param",
-      "issue": "RSI下限(20)可能偏低",
-      "suggestion": "建议提高到40，避免超卖陷阱；或降低到30捕捉超跌反弹",
+      "type": "sentiment",
+      "issue": "VHSI=25.8，市场恐慌",
+      "suggestion": "提高入场门槛到75分，收紧止损条件",
       "priority": "中",
       "id": "HK001",
-      "category": "参数优化"
+      "category": "市场情绪"
     },
     {
-      "type": "param",
-      "issue": "RSI上限(80)可能偏高",
-      "suggestion": "建议降低到65，避免追高",
-      "priority": "中",
+      "type": "llm_analysis",
+      "issue": "RSI范围40-65在恐慌市(VHSI=25.8)中易错过超跌反弹且可能捕获弱势下行股",
+      "suggestion": "将RSI下限临时下调至30-35捕捉恐慌错杀机会，或增加RSI底背离/拐头向上确认条件",
+      "priority": "高",
       "id": "HK002",
-      "category": "参数优化"
+      "category": "LLM深度分析"
+    },
+    {
+      "type": "llm_analysis",
+      "issue": "成交量阈值缺失导致信号噪音大，恐慌市中难以区分无量阴跌与放量企稳",
+      "suggestion": "增设成交量过滤（如当日成交量>20日均量1.5倍确认资金承接，或连续缩量后首根放量阳线）",
+      "priority": "高",
+      "id": "HK003",
+      "category": "LLM深度分析"
     }
   ]
 }

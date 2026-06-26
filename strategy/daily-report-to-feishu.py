@@ -15,7 +15,7 @@ from datetime import datetime
 
 # 添加futu路径
 sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
-from futu import OpenQuoteContext, OpenSecTradeContext, OpenHKTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
+from futu import OpenQuoteContext, OpenSecTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
 
 # 常量
 WIKI_SPACE = "7618972433919445958"
@@ -77,8 +77,10 @@ class ComprehensiveReportV11:
         'HK.09988': '阿里巴巴', 'HK.08006': '汇通达', 'HK.08035': '英皇证券',
     }
     
-    def __init__(self, us_mode=False):
+    def __init__(self, us_mode=False, report_date_str=None):
         self.us_mode = us_mode
+        # 2026-06-19 east：美股模式下报告日期是「北京今天 -1」（美股交易日），其他模式默认今天
+        self.report_date_str = report_date_str or datetime.now().strftime("%Y-%m-%d")
     
     @property
     def llm(self):
@@ -328,9 +330,142 @@ class ComprehensiveReportV11:
         self.hk_vhsi = self.get_vhsi_data()
         # 获取VIX
         self.us_vix = self.get_vix_data()
-        
+
+        # 2026-06-18 east 修复：使用完整情绪评分模块（多数据源综合）
+        self.hk_sentiment_full = None
+        self.us_sentiment_full = None
+        try:
+            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            from hk_market_sentiment import HKMarketSentiment
+            self.hk_sentiment_full = HKMarketSentiment().get_market_sentiment()
+        except Exception as e:
+            print(f"⚠️ 获取港股完整情绪失败: {e}")
+        try:
+            from us_market_sentiment import USMarketSentiment
+            self.us_sentiment_full = USMarketSentiment().get_market_sentiment()
+        except Exception as e:
+            print(f"⚠️ 获取美股完整情绪失败: {e}")
+
         print(f"✅ VHSI={self.hk_vhsi:.1f}, VIX={self.us_vix:.1f}")
+        if self.hk_sentiment_full:
+            print(f"✅ 港股综合情绪分: {self.hk_sentiment_full.get('sentiment_score')}/100")
+        if self.us_sentiment_full:
+            print(f"✅ 美股综合情绪分: {self.us_sentiment_full.get('sentiment_score')}/100 ({self.us_sentiment_full.get('sentiment_label')})")
     
+    def enrich_positions_for_llm(self, positions, news_db_path='/home/admin/.openclaw/workspace-stock/data/news/news.db'):
+        """为 LLM 风险/操作建议丰富持仓数据
+
+        附加字段：
+          - news_sentiment_24h: 24h 平均情绪（0.5 默认）
+          - news_count_24h:     24h 新闻数
+          - top_news:           最多 3 条最近重要新闻 [{title, sentiment, hours_ago}]
+          - days_held:          持有天数（来自 open-positions.json）
+          - entry_price:        入场价
+          - rsi/ma20/atr:       技术指标（有则传，无则丢空）
+        """
+        import sqlite3
+        from datetime import datetime
+
+        # 1. 读 open-positions.json 补充 entry_price / entry_time
+        open_pos_map = {}
+        try:
+            with open('/home/admin/.openclaw/workspace-stock/data/open-positions.json', 'r') as f:
+                for op in json.load(f):
+                    raw = (op.get('symbol') or '').replace('US.', '').replace('HK.', '')
+                    open_pos_map[raw] = op
+        except Exception:
+            pass
+
+        # 2. 读 us-opportunities.json / hk-opportunities.json 补充 RSI/MA20/ATR
+        tech_map = {}
+        for opp_file in ('us-opportunities.json', 'hk-opportunities.json'):
+            try:
+                with open(f'/home/admin/.openclaw/workspace-stock/data/{opp_file}', 'r') as f:
+                    payload = json.load(f)
+                    items = payload.get('opportunities', payload) if isinstance(payload, dict) else payload
+                    for x in items:
+                        sym = (x.get('symbol') or '').replace('US.', '').replace('HK.', '')
+                        if sym and sym not in tech_map:
+                            tech_map[sym] = {
+                                'rsi':   x.get('rsi'),
+                                'ma20':  x.get('ma20'),
+                                'ma50':  x.get('ma50'),
+                                'atr':   x.get('atr'),
+                                'volume_ratio': x.get('volume_ratio'),
+                                'change_pct':   x.get('change_pct'),
+                            }
+            except Exception:
+                pass
+
+        # 3. 一次连接拉所有持仓股的新闻汇总
+        sentiment_map = {}
+        top_news_map = {}
+        try:
+            conn = sqlite3.connect(news_db_path, timeout=2)
+            cur = conn.cursor()
+            for pos in positions:
+                raw = (pos.get('symbol') or '').replace('US.', '').replace('HK.', '')
+                if not raw:
+                    continue
+                # 均值 & 总数
+                cur.execute("""
+                    SELECT ROUND(AVG(n.sentiment), 2), COUNT(*)
+                    FROM stock_mentions sm JOIN news n ON n.id = sm.news_id
+                    WHERE sm.symbol = ? AND n.timestamp > datetime('now', '-24 hours')
+                """, (raw,))
+                avg_s, cnt = cur.fetchone() or (None, 0)
+                sentiment_map[raw] = {
+                    'avg': float(avg_s) if avg_s is not None else 0.5,
+                    'cnt': int(cnt or 0),
+                }
+                # 最近 3 条重要新闻（按情绪极端优先，同级近期优先）
+                cur.execute("""
+                    SELECT n.title, n.sentiment,
+                           ROUND((julianday('now') - julianday(n.timestamp))*24, 1) AS hours_ago
+                    FROM stock_mentions sm JOIN news n ON n.id = sm.news_id
+                    WHERE sm.symbol = ? AND n.timestamp > datetime('now', '-24 hours')
+                    ORDER BY ABS(n.sentiment - 0.5) DESC, n.timestamp DESC
+                    LIMIT 3
+                """, (raw,))
+                top_news_map[raw] = [
+                    {'title': (t or '')[:100],
+                     'sentiment': float(s) if s is not None else 0.5,
+                     'hours_ago': float(ha) if ha is not None else 0.0}
+                    for t, s, ha in cur.fetchall()
+                ]
+            conn.close()
+        except Exception as e:
+            print(f"⚠️ 拉取持仓新闻失败: {e}")
+
+        # 4. 给每个 position 对象合并字段
+        now = datetime.now()
+        for pos in positions:
+            raw = (pos.get('symbol') or '').replace('US.', '').replace('HK.', '')
+
+            sm = sentiment_map.get(raw, {'avg': 0.5, 'cnt': 0})
+            pos['news_sentiment_24h'] = sm['avg']
+            pos['news_count_24h']     = sm['cnt']
+            pos['top_news']           = top_news_map.get(raw, [])
+
+            op = open_pos_map.get(raw, {})
+            pos['entry_price'] = op.get('entry_price') or pos.get('cost') or pos.get('cost_price')
+            entry_time = op.get('entry_time')
+            if entry_time:
+                try:
+                    et = datetime.fromisoformat(entry_time)
+                    pos['days_held'] = max(0, (now - et).days)
+                except Exception:
+                    pos['days_held'] = None
+            else:
+                pos['days_held'] = None
+
+            tech = tech_map.get(raw, {})
+            for k in ('rsi', 'ma20', 'ma50', 'atr', 'volume_ratio', 'change_pct'):
+                if tech.get(k) is not None:
+                    pos[k] = tech[k]
+
+        return positions
+
     def get_position_news(self, symbols, limit=2):
         """获取持仓相关新闻
         
@@ -666,7 +801,8 @@ class ComprehensiveReportV11:
     def build_markdown_report(self):
         """构建Markdown日报"""
         title = "🇭🇰🇺🇸 港股美股日报"
-        date_str = datetime.now().strftime('%Y-%m-%d')
+        # 2026-06-19 east：使用 report_date_str（美股模式 = 美股交易日）保证标题与文件名一致
+        date_str = self.report_date_str
         
         acc_names = {15270898: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
         symbol_names = {
@@ -782,17 +918,7 @@ class ComprehensiveReportV11:
             report += f"| 总市值 | ${us_stats['total_market_val']:,.2f} |\n"
             report += f"| 总浮盈 | ${us_stats['total_pnl']:+,.2f} |\n"
             report += f"| 平均浮盈 | {us_stats['avg_pnl_pct']:+.2f}% |\n"
-            
-            # 显示当前持仓明细
-            if us_stats['positions']:
-                report += "\n**持仓明细：**\n\n"
-                report += "| 标的 | 市值 | 浮盈 |\n"
-                report += "|------|------|------|\n"
-                for p in us_stats['positions'][:10]:
-                    sym = p.get('symbol', '')
-                    mv = p.get('market_val', 0)
-                    pnl_pct = p.get('pnl_pct', 0)
-                    report += f"| {sym} | ${mv:,.0f} | {pnl_pct:+.2f}% |\n"
+            # 持仓明细已在「二、当前持仓明细」展示，此处不再重复
         else:
             report += "暂无持仓\n\n"
         report += "\n"
@@ -867,6 +993,8 @@ class ComprehensiveReportV11:
                 time = trade.get('close_time', '')[:16]
                 reason = trade.get('reason', '未知')
                 stop_type = trade.get('stop_type', '')
+                # 2026-06-18 east 修复：优先用与飞书一致的 LLM 复盘
+                llm_review = trade.get('llm_review', '')
                 pnl_pct = trade.get('pnl_pct', 0)
                 peak_pnl = trade.get('peak_pnl_pct', 0)
                 hold_days = trade.get('hold_days', 0)
@@ -883,7 +1011,16 @@ class ComprehensiveReportV11:
                 report += f"- 🎯 平仓原因: {reason}"
                 if stop_type:
                     report += f" ({stop_type})"
-                report += "\n\n"
+                report += "\n"
+                # 2026-06-18 east 修复：追加 LLM 复盘文本（与飞书一致）
+                if llm_review and llm_review.strip() and llm_review.strip() != reason:
+                    # 都是多行文本，逐行缩进一下避免被 markdown 当成上一个 list 延续
+                    report += "- 📝 LLM 复盘:\n"
+                    for line in llm_review.strip().split('\n'):
+                        line = line.strip()
+                        if line:
+                            report += f"  - {line}\n"
+                report += "\n"
         else:
             report += "### 💰 平仓记录\n\n今日无平仓操作\n\n"
         
@@ -952,7 +1089,7 @@ class ComprehensiveReportV11:
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
         
         # LLM解读港股走势
-        hk_analysis = self.llm.get_market_analysis('hk', hk_index_data, self.hk_vhsi)
+        hk_analysis = self.llm.get_market_analysis('hk', hk_index_data, self.hk_vhsi, sentiment_full=self.hk_sentiment_full)
         if hk_analysis:
             report += f"\n> {hk_analysis}\n\n"
         else:
@@ -969,7 +1106,7 @@ class ComprehensiveReportV11:
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
         
         # LLM解读美股走势
-        us_analysis = self.llm.get_market_analysis('us', us_index_data, self.us_vix)
+        us_analysis = self.llm.get_market_analysis('us', us_index_data, self.us_vix, sentiment_full=self.us_sentiment_full)
         if us_analysis:
             report += f"\n> {us_analysis}\n\n"
         else:
@@ -980,20 +1117,30 @@ class ComprehensiveReportV11:
         us_emotion = "🔴 极度恐慌" if self.us_vix >= 30 else "🟠 恐慌" if self.us_vix >= 25 else "🟡 正常" if self.us_vix >= 20 else "🟢 平静"
         
         # 获取LLM市场预测
-        hk_prediction = self.llm.get_market_prediction('hk', self.hk_vhsi, hk_index_data)
-        us_prediction = self.llm.get_market_prediction('us', self.us_vix, us_index_data)
+        hk_prediction = self.llm.get_market_prediction('hk', self.hk_vhsi, hk_index_data, sentiment_full=self.hk_sentiment_full)
+        us_prediction = self.llm.get_market_prediction('us', self.us_vix, us_index_data, sentiment_full=self.us_sentiment_full)
         
-        report += f"""
-### 🇭🇰 港股市场情绪
+        # 2026-06-18 east 修复：港股多数据源情绪表格
+        report += "\n### 🇭🇰 港股市场情绪\n\n"
+        if self.hk_sentiment_full:
+            sf = self.hk_sentiment_full
+            score = sf.get('sentiment_score', 50)
+            score_label = '🟢乐观' if score >= 65 else '🟡中性' if score >= 45 else '🟠谨慎' if score >= 30 else '🔴恐慌'
+            report += f"**综合情绪评分**: {score:.0f}/100  {score_label}\n\n"
+            report += "| 权重 | 指标 | 数值 | 状态 |\n|------|------|------|------|\n"
+            vhsi_v = sf.get('vhsi')
+            report += f"| 35% | VHSI 波幅指数 | {vhsi_v if vhsi_v is None else f'{vhsi_v:.2f}'} | {sf.get('vhsi_sentiment','N/A')} |\n"
+            cf = sf.get('capital_flow')
+            cf_str = f"{cf:+.2f}亿" if cf is not None else 'N/A'
+            report += f"| 35% | 恒指权重股资金流 | {cf_str} | {sf.get('flow_sentiment','N/A')} |\n"
+            wr = sf.get('bull_bear_ratio')
+            wr_str = f"{wr:.3f}" if wr is not None else 'N/A'
+            report += f"| 30% | 牛熊证多空比 | {wr_str} | {sf.get('warrant_sentiment','N/A')} |\n"
+            report += "\n"
+        else:
+            report += f"| 指标名称 | 数值 | 状态说明 |\n|----------|------|----------|\n| VHSI波幅 | {self.hk_vhsi:.1f} | {hk_emotion} |\n\n"
 
-| 指标名称 | 数值 | 状态说明 |
-|----------|------|----------|
-| VHSI波幅 | {self.hk_vhsi:.1f} | {hk_emotion} |
-
-**未来3日港股预判：**
-| 时间 | 情绪预判 | 概率 | 市场走势预判 |
-|----------|----------|------|----------|
-"""
+        report += "**未来3日港股预判：**\n| 时间 | 情绪预判 | 概率 | 市场走势预判 |\n|----------|----------|------|----------|\n"
         if hk_prediction:
             for pred in hk_prediction:
                 report += f"| {pred['day']} | {pred['sentiment']} | {pred['probability']} | {pred['trend']} |\n"
@@ -1003,17 +1150,31 @@ class ComprehensiveReportV11:
 | T+3日 | 中性 | 60% | 等待信号 |
 """
         
-        report += f"""
-### 🇺🇸 美股市场情绪
+        # 2026-06-18 east 修复：美股多数据源情绪表格
+        report += "\n### 🇺🇸 美股市场情绪\n\n"
+        if self.us_sentiment_full:
+            sf = self.us_sentiment_full
+            score = sf.get('sentiment_score', 50)
+            label = sf.get('sentiment_label', '中性')
+            score_emoji = '🟢' if score >= 65 else '🟡' if score >= 45 else '🟠' if score >= 30 else '🔴'
+            report += f"**综合情绪评分**: {score:.0f}/100  {score_emoji}{label}\n\n"
+            report += "| 权重 | 指标 | 数值 | 状态 |\n|------|------|------|------|\n"
+            vix_v = sf.get('vix')
+            report += f"| 30% | VIX 恐慌指数 | {vix_v if vix_v is None else f'{vix_v:.2f}'} | {sf.get('vix_sentiment','N/A')} |\n"
+            fg = sf.get('fear_greed')
+            fg_str = f"{fg:.1f}" if fg is not None else 'N/A'
+            report += f"| 25% | CNN 恐慌贪婪 | {fg_str} | {sf.get('fg_sentiment','N/A')} |\n"
+            pcr = sf.get('option_ratio')
+            pcr_str = f"{pcr:.3f}" if pcr is not None else 'N/A'
+            report += f"| 25% | 期权 Put/Call | {pcr_str} | {sf.get('pcr_sentiment','N/A')} |\n"
+            spx = sf.get('spx_change')
+            spx_str = f"{spx:+.2f}%" if spx is not None else 'N/A'
+            report += f"| 20% | S&P 500 当日 | {spx_str} | {sf.get('spx_sentiment','N/A')} |\n"
+            report += "\n"
+        else:
+            report += f"| 指标名称 | 数值 | 状态说明 |\n|----------|------|----------|\n| VIX恐慌指数 | {self.us_vix:.1f} | {us_emotion} |\n\n"
 
-| 指标名称 | 数值 | 状态说明 |
-|----------|------|----------|
-| VIX恐慌指数 | {self.us_vix:.1f} | {us_emotion} |
-
-**未来3日美股预判：**
-| 时间 | 情绪预判 | 概率 | 市场走势预判 |
-|----------|----------|------|----------|
-"""
+        report += "**未来3日美股预判：**\n| 时间 | 情绪预判 | 概率 | 市场走势预判 |\n|----------|----------|------|----------|\n"
         if us_prediction:
             for pred in us_prediction:
                 report += f"| {pred['day']} | {pred['sentiment']} | {pred['probability']} | {pred['trend']} |\n"
@@ -1051,6 +1212,12 @@ class ComprehensiveReportV11:
         report += """## ⚠️ 八、风险提示与操作建议
 
 """
+        # 为LLM丰富持仓数据（新闻/情绪/技术/持仓天数）
+        try:
+            self.enrich_positions_for_llm(all_positions)
+        except Exception as _e:
+            print(f"⚠️ enrich_positions_for_llm 失败: {_e}")
+
         # 准备市场数据供LLM分析
         llm_market_data = {
             'pos_pct': pos_pct,
@@ -1060,12 +1227,22 @@ class ComprehensiveReportV11:
             'total_asset': total_asset,
             'total_pnl': total_pnl,
             'positions': all_positions,
-            'initial': 2000000
+            'initial': 2000000,
+            # 2026-06-18 east 修复：推送多数据源情绪评分给LLM
+            'hk_sentiment_score': self.hk_sentiment_full.get('sentiment_score') if self.hk_sentiment_full else None,
+            'us_sentiment_score': self.us_sentiment_full.get('sentiment_score') if self.us_sentiment_full else None,
+            'us_fear_greed': self.us_sentiment_full.get('fear_greed') if self.us_sentiment_full else None,
+            'us_put_call': self.us_sentiment_full.get('option_ratio') if self.us_sentiment_full else None,
+            'hk_capital_flow': self.hk_sentiment_full.get('capital_flow') if self.hk_sentiment_full else None,
+            'hk_warrant_ratio': self.hk_sentiment_full.get('bull_bear_ratio') if self.hk_sentiment_full else None,
         }
         
-        # LLM动态风险分析
+        # LLM动态风险分析 + 操作建议（合并为一次调用，两部分逻辑保持一致）
+        combined = self.llm.get_combined_assessment(llm_market_data) or {}
+        risk_text   = combined.get('risk_text')
+        action_text = combined.get('action_text')
+
         report += "### 1. 风险评估\n\n"
-        risk_text = self.llm.get_risk_assessment(llm_market_data)
         if risk_text:
             # 解析格式：风险等级|风险类型|具体描述|建议动作
             for line in risk_text.strip().split('\n'):
@@ -1086,14 +1263,27 @@ class ComprehensiveReportV11:
             vix_level = "🔴高" if self.us_vix >= 25 else "🟠中" if self.us_vix >= 20 else "🟡低"
             vhsi_level = "🔴高" if self.hk_vhsi >= 25 else "🟠中" if self.hk_vhsi >= 20 else "🟡低"
             report += f"• {vix_level} **系统性风险**：VIX({self.us_vix:.1f})/VHSI({self.hk_vhsi:.1f})\n\n"
+            # 2026-06-18 east 修复：补充多数据源详细提示
+            if self.us_sentiment_full:
+                us_score = self.us_sentiment_full.get('sentiment_score', 50)
+                if us_score < 35:
+                    report += f"• 🔴 **美股情绪偏谨慎**：综合评分 {us_score}/100，Put/Call={self.us_sentiment_full.get('option_ratio'):.2f}说明机构在对冲下行\n\n"
+                elif us_score < 50:
+                    report += f"• 🟠 **美股情绪偏中性偏空**：综合评分 {us_score}/100\n\n"
+            if self.hk_sentiment_full:
+                hk_score = self.hk_sentiment_full.get('sentiment_score', 50)
+                if hk_score < 35:
+                    cf = self.hk_sentiment_full.get('capital_flow') or 0
+                    report += f"• 🔴 **港股情绪偏谨慎**：综合评分 {hk_score}/100，权重股资金{cf:+.1f}亿\n\n"
+                elif hk_score < 50:
+                    report += f"• 🟠 **港股情绪偏中性偏空**：综合评分 {hk_score}/100\n\n"
             if pos_pct > 60:
                 report += f"• 🟠 **集中度风险**：持仓占比{pos_pct:.1f}%偏高\n\n"
             elif pos_pct < 20:
                 report += f"• 🟡 **资金闲置**：持仓仅{pos_pct:.1f}%，现金占比{cash_pct:.1f}%\n\n"
-        
+
         # LLM动态操作建议
         report += "### 2. 操作建议\n\n"
-        action_text = self.llm.get_action_recommendations(llm_market_data)
         if action_text:
             for line in action_text.strip().split('\n'):
                 line = line.strip()
@@ -1124,8 +1314,9 @@ class ComprehensiveReportV11:
     
     def save_report(self):
         """保存日报到文件"""
-        today = datetime.now().strftime("%Y-%m-%d")
-        md_file = MD_FILE.format(today)
+        # 2026-06-19 east：文件名使用 report_date_str（美股模式 = 美股交易日）
+        date_for_file = self.report_date_str
+        md_file = MD_FILE.format(date_for_file)
         os.makedirs(os.path.dirname(md_file), exist_ok=True)
         
         report = self.build_markdown_report()
@@ -1196,9 +1387,14 @@ def is_hk_holiday():
 
 
 def is_us_holiday():
-    """检查今天是否是美股休市日（美国公众假期）"""
-    from datetime import date
-    
+    """检查要报的那个美股交易日是否休市
+
+    cron 在北京 04:30 跑 ≈ 美东前一天 16:30，要报的是「北京今天 -1」那个美股交易日。
+    例：北京 2026-06-19（周五）跑 cron，要报的是美股 2026-06-18（周四），
+    而不是 Juneteenth。
+    """
+    from datetime import timedelta
+
     # 美国2026年主要公众假期（美股休市日）
     us_holidays_2026 = [
         '2026-01-01',   # 新年 New Year's Day
@@ -1211,15 +1407,23 @@ def is_us_holiday():
         '2026-11-26',   # 感恩节 Thanksgiving
         '2026-12-25',   # 圣诞节 Christmas Day
     ]
-    
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    weekday = datetime.now().weekday()  # 0=周一, 6=周日
-    
-    # 周日不交易（weekday=6），但周六凌晨需生成周五日报
-    if weekday >= 6:
+
+    # 2026-06-19 east 修复：检查"要报的那天"（北京今天 -1）而不是北京今天
+    target = datetime.now().date() - timedelta(days=1)
+    target_str = target.strftime("%Y-%m-%d")
+    target_weekday = target.weekday()  # 0=周一, 6=周日
+
+    # 美股周六、周日不交易
+    if target_weekday >= 5:
         return True
-    
-    return today_str in us_holidays_2026
+
+    return target_str in us_holidays_2026
+
+
+def get_us_trading_date_str():
+    """返回要报的美股交易日（北京今天 -1）的 YYYY-MM-DD 字符串。"""
+    from datetime import timedelta
+    return (datetime.now().date() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 def sync_futu_data():
@@ -1250,11 +1454,12 @@ def main():
     
     # 根据模式检查对应的交易日
     if us_mode:
-        # 美股模式：检查美股交易日
+        # 美股模式：检查美股交易日（北京今天 -1）
+        us_target_date = get_us_trading_date_str()
         if is_us_holiday():
-            print(f"⏭️ 今天是美股休市日（{today}），跳过美股日报")
+            print(f"⏭️ 美股交易日 {us_target_date} 休市，跳过美股日报")
             return
-        title = f"📊 美股日报 {today}"
+        title = f"📊 美股日报 {us_target_date}"
     else:
         # 港股模式：检查港股交易日
         if is_hk_holiday():
@@ -1269,7 +1474,12 @@ def main():
     
     # 1. 生成日报
     print("📝 生成完整日报...")
-    reporter = ComprehensiveReportV11(us_mode=us_mode)
+    # 2026-06-19 east：美股报告日期 = 美股交易日（北京今天 -1），港股 = 北京今天
+    if us_mode:
+        report_date_for_obj = us_target_date
+    else:
+        report_date_for_obj = today
+    reporter = ComprehensiveReportV11(us_mode=us_mode, report_date_str=report_date_for_obj)
     reporter.fetch_data()
     md_file, report_content = reporter.save_report()
     

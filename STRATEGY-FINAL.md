@@ -226,7 +226,7 @@ AppId: cli_a93b169884f8dcc1
 ├── 📁 数据目录
 │   └── data/
 │       ├── trades.json                # 交易数据
-│       ├── opportunities.json         # 美股机会
+│       ├── us-opportunities.json      # 美股机会
 │       ├── hk-opportunities.json      # 港股机会
 │       └── alerts.json                # 警报数据
 │

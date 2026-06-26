@@ -24,7 +24,7 @@ class HKOptimizer:
         """获取所需数据"""
         data = {}
         
-        config_path = os.path.join(self.config_dir, 'hk-strategy-dynamic-v2.1.json')
+        config_path = os.path.join(self.config_dir, 'hk-strategy.json')
         try:
             with open(config_path, 'r') as f:
                 data['config'] = json.load(f)

@@ -13,11 +13,11 @@ class NewsTradingIntegration:
     def __init__(self):
         self.news_db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
         self.trades_file = '/home/admin/.openclaw/workspace-stock/data/trades.json'
-        self.opportunities_file = '/home/admin/.openclaw/workspace-stock/data/opportunities.json'
+        self.opportunities_file = '/home/admin/.openclaw/workspace-stock/data/us-opportunities.json'
         
         # 加载策略配置
-        self.hk_strategy = self.load_strategy('hk-strategy-v1.0.json')
-        self.us_strategy = self.load_strategy('us-strategy-v1.6.json')
+        self.hk_strategy = self.load_strategy('hk-strategy.json')
+        self.us_strategy = self.load_strategy('us-strategy.json')
     
     def load_strategy(self, filename: str) -> Dict[str, Any]:
         """加载策略配置"""

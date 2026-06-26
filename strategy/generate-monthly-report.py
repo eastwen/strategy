@@ -97,7 +97,7 @@ class MonthlyReportV2:
         
         # 美股信号
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/opportunities.json', 'r') as f:
+            with open('/home/admin/.openclaw/workspace-stock/data/us-opportunities.json', 'r') as f:
                 data = json.load(f)
                 self.us_signals = data.get('opportunities', [])
         except:

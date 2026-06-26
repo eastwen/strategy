@@ -1,0 +1,1914 @@
+#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3
+"""
+自动交易执行器 v2.1
+集成技术指标检查
+- MA趋势判断
+- RSI检查
+- 成交量检查
+- MACD死叉检查
+- ATR动态止损/止盈
+- 仓位控制
+"""
+
+import sys
+import os
+import json
+import time
+import requests
+from datetime import datetime, time as dt_time
+
+sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+
+from futu import OpenQuoteContext, OpenUSTradeContext, OpenHKTradeContext, RET_OK, OrderType, TrdSide, TrdEnv, Market, SecurityType
+
+# 导入技术指标模块（区分美股/港股）
+sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+try:
+    from technical_indicators_us import USTechIndicators
+    from technical_indicators_hk import HKTechIndicators
+    TECH_INDICATORS_AVAILABLE = True
+except Exception as e:
+    TECH_INDICATORS_AVAILABLE = False
+    print(f"⚠️ 技术指标模块不可用: {e}")
+
+class AutoTrader:
+    """自动交易执行器"""
+    
+    def __init__(self):
+        self.load_config()
+        self.quote_ctx = None
+        self.trade_ctx = None
+        self.hk_trade_ctx = None
+        self.closed_trades_file = '/home/admin/.openclaw/workspace-stock/data/closed-trades.json'
+        self.open_positions_file = '/home/admin/.openclaw/workspace-stock/data/open-positions.json'
+        self.staged_reductions_file = '/home/admin/.openclaw/workspace-stock/data/staged-reductions.json'
+        self._vix_cache = {'value': None, 'timestamp': 0}
+    
+    def save_open_position(self, symbol, shares, entry_price, market='us', score=0, reasons=None):
+        """保存入场记录
+        
+        Args:
+            symbol: 标的代码
+            shares: 持仓数量
+            entry_price: 开仓价格
+            market: 市场（us/hk）
+            score: 开仓评分
+            reasons: 开仓原因列表（技术信号、新闻等）
+        """
+        try:
+            positions = []
+            try:
+                with open(self.open_positions_file, 'r') as f:
+                    positions = json.load(f)
+            except:
+                positions = []
+            
+            # 检查是否已存在
+            positions = [p for p in positions if p.get('symbol') != symbol]
+            
+            positions.append({
+                'symbol': symbol,
+                'shares': shares,
+                'entry_price': entry_price,
+                'entry_time': datetime.now().isoformat(),
+                'market': market,
+                'entry_score': score,
+                'entry_reasons': reasons or [],
+                'peak_pnl_pct': 0.0,  # 峰值浮盈
+                'peak_time': datetime.now().isoformat()
+            })
+            
+            with open(self.open_positions_file, 'w') as f:
+                json.dump(positions, f, ensure_ascii=False, indent=2)
+            print(f"   💾 已记录入场: {symbol} @ ${entry_price} (评分{score})")
+        except Exception as e:
+            print(f"   ⚠️ 记录入场失败: {e}")
+    
+    def update_peak_profit(self, symbol, current_pnl_pct):
+        """更新持仓峰值浮盈"""
+        try:
+            try:
+                with open(self.open_positions_file, 'r') as f:
+                    positions = json.load(f)
+            except:
+                return
+            
+            updated = False
+            for p in positions:
+                if p.get('symbol') == symbol:
+                    if current_pnl_pct > p.get('peak_pnl_pct', 0):
+                        p['peak_pnl_pct'] = current_pnl_pct
+                        p['peak_time'] = datetime.now().isoformat()
+                        updated = True
+            
+            if updated:
+                with open(self.open_positions_file, 'w') as f:
+                    json.dump(positions, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def remove_open_position(self, symbol):
+        """移除入场记录"""
+        try:
+            try:
+                with open(self.open_positions_file, 'r') as f:
+                    positions = json.load(f)
+            except:
+                return None
+            
+            # 找到并移除
+            result = None
+            positions = [p for p in positions if p.get('symbol') != symbol]
+            
+            with open(self.open_positions_file, 'w') as f:
+                json.dump(positions, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def get_open_position(self, symbol):
+        """获取入场记录"""
+        try:
+            with open(self.open_positions_file, 'r') as f:
+                positions = json.load(f)
+            for p in positions:
+                if p.get('symbol') == symbol:
+                    return p
+            return None
+        except:
+            return None
+    
+    def save_closed_trade(self, symbol, side, shares, entry_price, exit_price, pnl_pct, reason, market='us', stop_type=None, entry_score=0):
+        """保存平仓记录
+        
+        Args:
+            symbol: 标的代码
+            side: 买卖方向
+            shares: 数量
+            entry_price: 开仓价（从Futu持仓获取）
+            exit_price: 平仓价
+            pnl_pct: 盈亏比例
+            reason: 平仓原因
+            market: 市场
+            stop_type: 止损类型
+            entry_score: 开仓评分
+        """
+        try:
+            # 计算盈亏
+            pnl = (exit_price - entry_price) * shares if entry_price > 0 else 0
+            
+            # 读取现有记录
+            closed_trades = []
+            try:
+                with open(self.closed_trades_file, 'r') as f:
+                    closed_trades = json.load(f)
+            except:
+                closed_trades = []
+            
+            # 添加新记录
+            trade = {
+                'symbol': symbol,
+                'side': side,
+                'shares': shares,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl': pnl,
+                'pnl_pct': pnl_pct,
+                'reason': reason,
+                'stop_type': stop_type,
+                'market': market,
+                'entry_score': entry_score,
+                'close_time': datetime.now().isoformat()
+            }
+            closed_trades.append(trade)
+            
+            # 保存
+            with open(self.closed_trades_file, 'w') as f:
+                json.dump(closed_trades, f, ensure_ascii=False, indent=2)
+            
+            print(f"   💾 已保存平仓记录: {symbol} {reason} {pnl_pct:+.2f}%")
+        except Exception as e:
+            print(f"   ⚠️ 保存平仓记录失败: {e}")
+        
+    def load_config(self):
+        """加载配置"""
+        # 直接使用默认配置（不需要配置文件）
+        self.us_config = {'min_score': 80, 'position_size': 0.12, 'max_positions': 999}
+        self.hk_config = {'min_score': 70, 'position_size': 0.03, 'max_positions': 999}
+        self.risk_config = {
+            'us_single_position_limit': 0.12,
+            'us_total_position_limit': 0.40,
+            'hk_single_position_limit': 0.03,
+            'hk_total_position_limit': 0.40,
+        }
+        self.cooldown_seconds = 86400  # 24小时冷却：同一标的一天内不重复交易
+        self.recently_closed = {}  # {symbol: timestamp} 记录最近平仓的标的，防止重复平仓
+        
+        # 兼容旧代码
+        self.config = {
+            'min_score': self.us_config.get('min_score', 80),
+            'max_positions': self.us_config.get('max_positions', 999),
+            'position_size': self.us_config.get('position_size', 0.12),
+        }
+        
+        try:
+            with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
+                keys = json.load(f)
+            self.feishu_chat_id = keys.get('feishu', {}).get('chatId', '') or keys.get('feishu', {}).get('openId', '')
+        except:
+            pass
+    
+    def connect_futu(self):
+        """连接Futu OpenD（每次都创建新连接确保数据最新）"""
+        # 关闭旧连接
+        if self.trade_ctx:
+            try:
+                self.trade_ctx.close()
+            except:
+                pass
+        if self.hk_trade_ctx:
+            try:
+                self.hk_trade_ctx.close()
+            except:
+                pass
+        if self.quote_ctx:
+            try:
+                self.quote_ctx.close()
+            except:
+                pass
+        try:
+            self.quote_ctx = OpenQuoteContext('127.0.0.1', 11111)
+            
+            # 模拟盘不需要解锁，直接创建交易上下文
+            # 美股交易上下文
+            self.trade_ctx = OpenUSTradeContext('127.0.0.1', 11111)
+            
+            # 港股交易上下文
+            self.hk_trade_ctx = OpenHKTradeContext('127.0.0.1', 11111)
+            
+            print("✅ 连接Futu OpenD成功")
+            return True
+        except Exception as e:
+            print(f"❌ 连接Futu失败: {e}")
+            return False
+    
+    def place_order(self, symbol, side, quantity, market='us'):
+        """下单"""
+        # 选择正确的交易上下文
+        ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+        try:
+            ret, data = ctx.place_order(
+                price=0,  # 市价单
+                qty=quantity,
+                code=symbol,
+                order_type=OrderType.MARKET,
+                trd_side=TrdSide.BUY if side == 'BUY' else TrdSide.SELL,
+                trd_env=TrdEnv.SIMULATE
+            )
+            
+            if ret == RET_OK:
+                order_id = data['order_id'].iloc[0]
+                market_tag = '🇭🇰' if market == 'hk' else '🇺🇸'
+                print(f"{market_tag} 下单成功: 订单ID {order_id}")
+                return True, order_id
+            else:
+                print(f"❌ 下单失败: {data}")
+                return False, str(data)
+        except Exception as e:
+            print(f"❌ 下单异常: {e}")
+            return False, str(e)
+    
+    def _get_hk_lot_size(self, symbol):
+        """获取港股每手股数：优先从 Futu 实时基础信息查询，失败时使用本地兜底。"""
+        try:
+            ctx = self.quote_ctx
+            close_after = False
+            if ctx is None:
+                ctx = OpenQuoteContext('127.0.0.1', 11111)
+                close_after = True
+            try:
+                ret, data = ctx.get_stock_basicinfo(Market.HK, SecurityType.STOCK, [symbol])
+                if ret == RET_OK and data is not None and len(data) > 0 and 'lot_size' in data.columns:
+                    lot_size = int(data.iloc[0].get('lot_size') or 0)
+                    if lot_size > 0:
+                        return lot_size
+            finally:
+                if close_after:
+                    ctx.close()
+        except Exception as e:
+            print(f"⚠️ 获取港股每手股数失败 {symbol}: {e}，使用本地兜底")
+
+        # 常见港股每手股数映射（兜底）
+        lot_sizes = {
+            'HK.00001': 500,   # 长和
+            'HK.00005': 400,   # 汇丰控股
+            'HK.00012': 1000,  # 恒基地产
+            'HK.00016': 1000,  # 新鸿基地产
+            'HK.00027': 1000,  # 银河娱乐
+            'HK.00700': 100,   # 腾讯
+            'HK.09988': 100,   # 阿里巴巴
+            'HK.00939': 1000,  # 建设银行
+            'HK.00981': 500,   # 中银香港
+            'HK.02318': 500,   # 中国平安
+            'HK.02331': 500,   # 李宁
+            'HK.09868': 100,   # 小鹏汽车
+            'HK.09866': 100,   # 蔚来
+            'HK.02333': 500,   # 比亚迪股份
+            'HK.02269': 500,   # 药明生物
+            'HK.01093': 1000,  # 石药集团
+            'HK.02319': 1000,  # 蒙牛乳业
+            'HK.02020': 500,   # 安踏体育
+        }
+        return lot_sizes.get(symbol, 100)
+    
+    def check_trading_hours(self, market='us'):
+        """检查是否在交易时间（包含盘前+盘中+盘后）"""
+        now = datetime.now().time()
+        
+        if market == 'us':
+            # 美股交易时段：盘中(21:00-04:00) + 盘后(04:00-08:00)
+            # 盘中: 21:00 - 次日04:00
+            market_start = dt_time(21, 0)
+            market_end = dt_time(4, 0)
+            # 盘后: 04:00 - 04:30
+            after_hours_start = dt_time(4, 0)
+            after_hours_end = dt_time(4, 30)
+            
+            # 判断是否在交易时段
+            if now >= market_start or now <= market_end:
+                return True  # 盘中（跨午夜）
+            if now >= after_hours_start and now <= after_hours_end:
+                return True  # 盘后
+            
+            return False
+        elif market == 'hk':
+            start = dt_time(9, 30)
+            end = dt_time(16, 0)
+            return start <= now <= end
+        
+        return False
+    
+    def get_account_and_positions(self, market='us'):
+        """获取账户和持仓信息（从API实时获取）
+        
+        Args:
+            market: 'us' 或 'hk'，决定使用哪个交易上下文
+        """
+        try:
+            # 根据市场选择交易上下文
+            if market == 'hk' and self.hk_trade_ctx:
+                ctx = self.hk_trade_ctx
+                print(f"  📊 使用港股交易上下文")
+            else:
+                ctx = self.trade_ctx
+                print(f"  📊 使用美股交易上下文")
+            
+            # 查询账户
+            ret, acc_data = ctx.accinfo_query(trd_env=TrdEnv.SIMULATE)
+            if ret != RET_OK or acc_data is None or len(acc_data) == 0:
+                print(f"⚠️ {market.upper()}账户查询失败: {ret}")
+                return None
+            
+            total_assets = acc_data.iloc[0]['total_assets']
+            total_cash = acc_data.iloc[0]['cash']
+            account_market_val = acc_data.iloc[0].get('market_val', 0)
+            
+            print(f"  💰 {market.upper()}账户: 总资产=${total_assets:,.2f}, 现金=${total_cash:,.2f}, 持仓市值=${account_market_val:,.2f}")
+            
+            # 查询持仓
+            ret, positions_data = ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
+            
+            positions = []
+            if ret == RET_OK and positions_data is not None and len(positions_data) > 0:
+                for p in positions_data.itertuples():
+                    positions.append({
+                        'symbol': p.code,
+                        'shares': p.qty,
+                        'cost_price': getattr(p, 'cost_price', 0),
+                        'market_val': getattr(p, 'market_val', 0),
+                        'pl_ratio': float(getattr(p, 'pl_ratio', 0))
+                    })
+                print(f"  📈 {market.upper()}持仓: {len(positions)}只")
+            else:
+                print(f"  📈 {market.upper()}持仓: 0只")
+            
+            # 获取未完成订单
+            ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+            pending_orders = []
+            if ret == RET_OK and orders is not None:
+                pending = orders[orders['order_status'] != 'FILLED_ALL']
+                for o in pending.itertuples():
+                    pending_orders.append(o.code.replace('US.', '').replace('HK.', ''))
+                if pending_orders:
+                    print(f"  ⏳ {market.upper()}未完成订单: {len(pending_orders)}个")
+            
+            return {
+                'total_assets': total_assets,
+                'cash': total_cash,
+                'market_val': account_market_val,
+                'positions': positions,
+                'pending_orders': pending_orders
+            }
+        except Exception as e:
+            print(f"❌ 获取{market.upper()}账户信息失败: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return None
+    
+    def get_opportunities(self):
+        """获取交易机会（拒绝使用过期机会文件，避免旧信号触发通知/交易）"""
+        opportunities = {'us': [], 'hk': []}
+        max_age_hours = 72
+
+        def load_fresh(path, market_name):
+            try:
+                if not os.path.exists(path):
+                    print(f"⚠️ {market_name}机会文件不存在: {path}")
+                    return []
+
+                with open(path, 'r') as f:
+                    data = json.load(f)
+
+                # 优先检查文件内的 last_scan；没有则退回文件 mtime
+                last_scan = data.get('last_scan')
+                if last_scan:
+                    try:
+                        scan_dt = datetime.fromisoformat(last_scan.replace('Z', '+00:00')).replace(tzinfo=None)
+                    except Exception:
+                        scan_dt = None
+                else:
+                    scan_dt = None
+
+                if scan_dt is None:
+                    scan_dt = datetime.fromtimestamp(os.path.getmtime(path))
+
+                age_hours = (datetime.now() - scan_dt).total_seconds() / 3600
+                if age_hours > max_age_hours:
+                    print(f"⚠️ {market_name}机会数据过期: {age_hours:.1f}小时前，已忽略 {path}")
+                    return []
+
+                return data.get('opportunities', [])
+            except Exception as e:
+                print(f"⚠️ 读取{market_name}机会失败: {e}")
+                return []
+
+        opportunities['us'] = load_fresh('/home/admin/.openclaw/workspace-stock/data/opportunities.json', '美股')
+        opportunities['hk'] = load_fresh('/home/admin/.openclaw/workspace-stock/data/hk-opportunities.json', '港股')
+        return opportunities
+
+    def find_opportunity(self, symbol, market='us'):
+        """按标的从机会文件中读取最新动态分析结果。"""
+        target = self.normalize_symbol(symbol)
+        try:
+            opportunities = self.get_opportunities().get(market, [])
+            for opp in opportunities:
+                if self.normalize_symbol(opp.get('symbol', '')) == target:
+                    return opp
+        except Exception as e:
+            print(f"⚠️ 查找机会数据失败 {symbol}: {e}")
+        return {}
+
+    def build_dynamic_signal_details(self, symbol, market='us', score=0, llm_analysis=None, reasons=None):
+        """构造飞书通知的动态四源评分、信号类型和LLM结论。"""
+        opp = self.find_opportunity(symbol, market)
+        score_total = opp.get('final_score', opp.get('score', opp.get('base_score', score or 0)))
+
+        def num(value, default=0):
+            try:
+                return float(value)
+            except:
+                return default
+
+        # 1) 优先使用扫描器/机会文件已经写入的分项字段
+        score_news = opp.get('score_news', opp.get('news_score', opp.get('international_news_score')))
+        score_announce = opp.get('score_announce', opp.get('announce_score', opp.get('official_announce_score')))
+        score_community = opp.get('score_community', opp.get('community_score'))
+        score_institution = opp.get('score_institution', opp.get('institution_score', opp.get('analyst_score')))
+
+        # 2) 分项缺失时，用机会情绪/基础分动态拆分，避免通知固定为0
+        sentiment = num(opp.get('sentiment', 0.7), 0.7)
+        base_score = num(opp.get('base_score', score_total), num(score_total, 0))
+        if score_news is None:
+            score_news = int(min(30, max(0, base_score * 0.30 * min(sentiment + 0.2, 1.0))))
+        if score_announce is None:
+            score_announce = int(min(20, max(0, base_score * 0.20 * min(sentiment + 0.1, 1.0))))
+        if score_community is None:
+            score_community = int(min(25, max(0, base_score * 0.25 * sentiment)))
+        if score_institution is None:
+            score_institution = int(min(25, max(0, base_score * 0.25 * sentiment)))
+
+        # 3) 如果本地新闻库有更细数据，用真实新闻情绪覆盖新闻/公告/社区/机构分项
+        try:
+            import sqlite3
+            db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
+            clean_sym = self.normalize_symbol(symbol)
+            conn = sqlite3.connect(db_path)
+            queries = [
+                ('news', 30, 0.2, 60, '''
+                    SELECT ROUND(AVG(n.sentiment),2), COUNT(*)
+                    FROM news n
+                    WHERE (n.symbol = ? OR n.title LIKE ?)
+                    AND n.source IN ("Yahoo Finance", "Finnhub", "Google News Tech")
+                    AND n.timestamp > datetime("now", "-24 hours")
+                '''),
+                ('announce', 20, 0.3, 40, '''
+                    SELECT ROUND(AVG(n.sentiment),2), COUNT(*)
+                    FROM news n
+                    WHERE (n.symbol = ? OR n.title LIKE ?)
+                    AND n.source IN ("SEC EDGAR", "Tushare-公告", "港交所")
+                    AND n.timestamp > datetime("now", "-72 hours")
+                '''),
+                ('community', 25, 0.3, 50, '''
+                    SELECT ROUND(AVG(n.sentiment),2), COUNT(*)
+                    FROM news n
+                    WHERE (n.symbol = ? OR n.title LIKE ?)
+                    AND n.source IN ("新浪财经", "东方财富", "观察者网")
+                    AND n.timestamp > datetime("now", "-24 hours")
+                '''),
+                ('institution', 25, 0.3, 50, '''
+                    SELECT ROUND(AVG(n.sentiment),2), COUNT(*)
+                    FROM news n
+                    WHERE (n.symbol = ? OR n.title LIKE ?)
+                    AND (n.title LIKE "%analyst%" OR n.title LIKE "%upgrade%" OR n.title LIKE "%downgrade%"
+                         OR n.title LIKE "%rating%" OR n.title LIKE "%target%" OR n.title LIKE "%评级%"
+                         OR n.title LIKE "%上调%" OR n.title LIKE "%下调%")
+                    AND n.timestamp > datetime("now", "-72 hours")
+                '''),
+            ]
+            values = {}
+            for key, cap, offset, scale, sql in queries:
+                row = conn.execute(sql, (clean_sym, f'%{clean_sym}%')).fetchone()
+                if row and row[1] > 0:
+                    values[key] = int(min(cap, max(0, (float(row[0]) - offset) * scale)))
+            conn.close()
+            score_news = values.get('news', score_news)
+            score_announce = values.get('announce', score_announce)
+            score_community = values.get('community', score_community)
+            score_institution = values.get('institution', score_institution)
+        except Exception as e:
+            print(f"⚠️ 新闻库评分读取失败 {symbol}: {e}")
+
+        signal_type = opp.get('signal_type') or opp.get('signal') or '四源共振自动交易'
+        llm_conclusion = ''
+        if llm_analysis:
+            llm_conclusion = llm_analysis.get('llm_reason', '')
+        if not llm_conclusion:
+            llm_conclusion = opp.get('llm_reason', '')
+
+        invalid_llm_markers = ['无API Key', 'API错误', '调用失败', 'LLM分析失败', '解析失败']
+        llm_invalid = (not llm_conclusion) or any(marker in str(llm_conclusion) for marker in invalid_llm_markers)
+        if llm_invalid:
+            try:
+                from llm_stock_analyzer import analyze_stock
+                market_data = {
+                    'symbol': self.normalize_symbol(symbol),
+                    'market': market,
+                    'base_score': int(num(score_total, score or 70)),
+                    'price': num(opp.get('price', 0), 0),
+                    'change_pct': num(opp.get('change_pct', 0), 0),
+                    'rsi': num(opp.get('rsi', 50), 50),
+                    'ma20': num(opp.get('ma20', 0), 0),
+                    'ma50': num(opp.get('ma50', 0), 0),
+                    'volume_ratio': num(opp.get('volume_ratio', 1.0), 1.0),
+                    'atr': num(opp.get('atr', 0), 0),
+                    'sentiment': opp.get('sentiment', '中性'),
+                }
+                fresh_llm = analyze_stock(symbol, market_data)
+                fresh_reason = fresh_llm.get('llm_reason', '')
+                if fresh_reason and not any(marker in fresh_reason for marker in invalid_llm_markers):
+                    llm_conclusion = fresh_reason
+                    score_total = fresh_llm.get('final_score', score_total)
+                    print(f"✅ {symbol} 通知前已重新LLM验真: {llm_conclusion}")
+            except Exception as e:
+                print(f"⚠️ {symbol} 通知前重新LLM验真失败: {e}")
+
+        if (not llm_conclusion or any(marker in str(llm_conclusion) for marker in invalid_llm_markers)) and reasons:
+            llm_conclusion = '；'.join(reasons[:3])
+        if not llm_conclusion or any(marker in str(llm_conclusion) for marker in invalid_llm_markers):
+            llm_conclusion = f"当前信号综合评分{score_total}分，LLM实时验真未返回有效结论；请以技术面、新闻情绪和风控条件复核"
+
+        return {
+            'score_total': int(num(score_total, 0)),
+            'score_news': int(num(score_news, 0)),
+            'score_announce': int(num(score_announce, 0)),
+            'score_community': int(num(score_community, 0)),
+            'score_institution': int(num(score_institution, 0)),
+            'signal_type': signal_type,
+            'llm_conclusion': llm_conclusion,
+        }
+    
+    def should_trade(self, symbol, positions, pending_orders=None):
+        """判断是否应该交易"""
+        # 标准化股票代码（精确匹配基础代码）
+        def normalize(sym):
+            sym = sym.upper()
+            if sym.startswith('US.'):
+                sym = sym[3:]
+            elif sym.startswith('HK.'):
+                sym = sym[3:]
+            parts = sym.split('.')
+            return parts[0]  # 返回基础代码
+        
+        sym = normalize(symbol)
+        
+        # 检查是否已持仓
+        for pos in positions:
+            pos_sym = normalize(pos.get('symbol', ''))
+            if sym == pos_sym:
+                return False, f"已持仓({pos.get('symbol')})"
+        
+        # 检查未完成订单
+        if pending_orders:
+            pending_normalized = [normalize(s) for s in pending_orders]
+            if sym in pending_normalized:
+                return False, f"有未完成订单"
+        
+        return True, "可以交易"
+    
+    def execute_trade(self, symbol, side, quantity, price, market='us', force=False, skip_llm=False, score=0, reasons=None):
+        """执行交易
+        
+        Args:
+            symbol: 标的代码
+            side: 买入/卖出
+            quantity: 数量
+            price: 价格
+            market: 市场（us/hk）
+            force: 是否强制执行（止损/止盈时为True）
+            skip_llm: 是否跳过LLM分析
+            score: 开仓评分（用于记录开仓原因）
+            reasons: 开仓原因列表（技术信号、新闻等）
+        """
+        print(f"\n{'='*60}")
+        print(f"📈 准备下单")
+        print(f"{'='*60}")
+        print(f"标的: {symbol}")
+        print(f"方向: {side}")
+        print(f"数量: {quantity}股")
+        print(f"价格: ${price:.2f}")
+        print(f"金额: ${quantity * price:,.2f}")
+        
+        # ===== LLM分析（下单前分析，基础评分≥70时触发）=====
+        # 止损交易跳过LLM分析
+        llm_analysis = None
+        if not skip_llm:
+            llm_analysis = self.llm_analysis_before_trade(symbol, price, market)
+            
+            # LLM分析失败或被阻止
+            if not llm_analysis:
+                print(f"❌ LLM分析不可用，禁止下单")
+                return False
+            
+            if not llm_analysis.get('passed', True):
+                print(f"❌ LLM分析失败，禁止下单: {llm_analysis.get('llm_reason', '未知错误')}")
+                return False
+            
+            final_score = llm_analysis.get('final_score', 0)
+            llm_reason = llm_analysis.get('llm_reason', '')
+            
+            print(f"\n🧠 LLM分析结果:")
+            print(f"   评分调整: {llm_analysis.get('score_adjust', 0):+d}")
+            print(f"   最终评分: {final_score}")
+            print(f"   LLM理由: {llm_reason}")
+            
+            # 如果LLM建议不买入，则取消
+            if final_score < 65:
+                print(f"❌ LLM分析不建议买入（评分: {final_score}），取消下单")
+                return False
+        
+        # 连接Futu
+        if not self.trade_ctx:
+            if not self.connect_futu():
+                self.send_notification(f"❌ 无法连接Futu，下单失败\n\n标的: {symbol}")
+                return False
+        
+        # 下单前检查持仓和订单（避免重复购买/下单）
+        check_ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+        check_ret, check_data = check_ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
+        if check_ret == RET_OK and check_data is not None:
+            # 检查持仓（使用相同的标准化方法）
+            def normalize(sym):
+                sym = sym.upper()
+                if sym.startswith('US.'):
+                    sym = sym[3:]
+                elif sym.startswith('HK.'):
+                    sym = sym[3:]
+                parts = sym.split('.')
+                return parts[0]
+            
+            current_symbols = [normalize(p.code) for p in check_data.itertuples()]
+            trade_sym = normalize(symbol)
+            if trade_sym in current_symbols and not force:
+                print(f"⚠️ 检查发现已持仓 {symbol}（标准化后: {trade_sym}），取消下单")
+                return False
+            
+            # 检查未完成订单（force=True 时跳过，因为止损/止盈会先撤单）
+            if not force:
+                ret, orders = check_ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+                if ret == RET_OK and orders is not None:
+                    pending = orders[orders['order_status'] != 'FILLED_ALL']
+                    pending_symbols = [o.code.replace('US.', '').replace('HK.', '') for o in pending.itertuples()]
+                    if trade_sym in pending_symbols:
+                        print(f"⚠️ {symbol} 有未完成订单，取消下单")
+                        return False
+        
+        # 下单
+        success, result = self.place_order(symbol, side, quantity, market)
+        
+        if success:
+            # 入场记录（买入时）
+            if side == 'BUY':
+                self.save_open_position(symbol, quantity, price, market, score=score, reasons=reasons)
+            
+            # 使用新模板发送通知
+            from feishu_pusher import FeishuPusher
+            pusher = FeishuPusher()
+            amount = quantity * price
+            if side == 'BUY':
+                target_stop_loss = price * 0.94
+                target_take_profit = price * 1.08
+                signal_details = self.build_dynamic_signal_details(
+                    symbol=symbol,
+                    market=market,
+                    score=score,
+                    llm_analysis=llm_analysis,
+                    reasons=reasons,
+                )
+                pusher.send_buy_notification(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=price,
+                    amount=amount,
+                    target_take_profit=target_take_profit,
+                    target_stop_loss=target_stop_loss,
+                    score_total=signal_details['score_total'],
+                    score_news=signal_details['score_news'],
+                    score_announce=signal_details['score_announce'],
+                    score_community=signal_details['score_community'],
+                    score_institution=signal_details['score_institution'],
+                    signal_type=signal_details['signal_type'],
+                    llm_conclusion=signal_details['llm_conclusion'],
+                    order_id=result,
+                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                )
+            else:
+                sell_reason = reasons[0] if reasons else "自动平仓"
+                sell_pnl_pct = 0.0
+                try:
+                    positions = []
+                    with open(self.open_positions_file, 'r') as f:
+                        positions = json.load(f)
+                    target = self.normalize_symbol(symbol)
+                    for pos in positions:
+                        if self.normalize_symbol(pos.get('symbol', '')) == target:
+                            entry_price = float(pos.get('entry_price', 0) or 0)
+                            if entry_price > 0:
+                                sell_pnl_pct = (price - entry_price) / entry_price * 100
+                            break
+                except Exception as e:
+                    print(f"⚠️ 卖出盈亏动态计算失败 {symbol}: {e}")
+                pusher.send_sell_notification(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=price,
+                    amount=amount,
+                    pnl_pct=sell_pnl_pct,
+                    reason=sell_reason,
+                    order_id=result,
+                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                )
+        
+        return success
+    
+    def check_technical_signals(self, symbol, market='us'):
+        """检查技术指标信号（根据市场类型选择指标模块）
+        
+        美股v1.6要求:
+        - MA20 > MA50, 价格 > MA20
+        - 技术信号 >= 2
+        - 成交量 >= 1.8x
+        - RSI < 65
+        
+        港股v2.0要求:
+        - MA20上升趋势, 价格 > MA20
+        - RSI 35-70
+        - 成交量 >= 1.5x
+        - 增强信号 >= 1个
+        """
+        if not TECH_INDICATORS_AVAILABLE:
+            print(f"⚠️ 技术指标模块不可用")
+            return {
+                'score': 0,
+                'can_enter': False,
+                'reasons': ["技术指标模块不可用"]
+            }
+        
+        print(f"\n🔍 检查技术指标 [{market.upper()}]: {symbol}")
+        
+        try:
+            if market.lower() == 'us':
+                # 美股指标
+                ti = USTechIndicators()
+            else:
+                # 港股指标
+                ti = HKTechIndicators()
+            
+            signals = ti.get_entry_signals(symbol)
+            ti.close()
+            
+            # 获取最大分数（美股8分，港股6分）
+            max_score = signals.get('max_score', 8)
+            print(f"   技术评分: {signals['score']}/{max_score}")
+            for reason in signals['reasons']:
+                print(f"   {reason}")
+            
+            return signals
+            
+        except Exception as e:
+            print(f"❌ 技术指标检查失败: {e}")
+            return {
+                'score': 0,
+                'can_enter': False,
+                'reasons': [f"检查失败: {e}"]
+            }
+    
+    def normalize_symbol(self, symbol):
+        """标准化股票代码，便于持仓和订单匹配"""
+        sym = str(symbol or '').upper()
+        if sym.startswith('US.') or sym.startswith('HK.'):
+            sym = sym[3:]
+        return sym.split('.')[0]
+
+    def get_account_position_value(self, account):
+        """获取账户当前持仓市值。优先用账户字段，缺失时按持仓求和。"""
+        if not account:
+            return 0.0
+        try:
+            account_market_val = float(account.get('market_val', 0) or 0)
+            if account_market_val > 0:
+                return account_market_val
+        except:
+            pass
+        total = 0.0
+        for pos in account.get('positions', []):
+            try:
+                total += float(pos.get('market_val', 0) or 0)
+            except:
+                pass
+        return total
+
+    def get_symbol_position_value(self, account, symbol):
+        """获取单个标的当前持仓市值。"""
+        target = self.normalize_symbol(symbol)
+        value = 0.0
+        for pos in (account or {}).get('positions', []):
+            if self.normalize_symbol(pos.get('symbol', '')) == target:
+                try:
+                    value += float(pos.get('market_val', 0) or 0)
+                except:
+                    pass
+        return value
+
+    def get_score_based_position(self, score, market='us'):
+        """按评分计算目标仓位。美股按8%-12%动态调整，港股沿用3%。"""
+        if market != 'us':
+            return self.hk_config.get('position_size', 0.03)
+        try:
+            score = float(score or 0)
+        except:
+            score = 0
+        if score < 80:
+            return 0.0
+        if score < 85:
+            return 0.08 + (score - 80) * 0.005  # 80-84: 8%-10%
+        if score < 90:
+            return 0.10 + (score - 85) * 0.0025  # 85-89: 10%-11%
+        if score < 95:
+            return 0.11 + (score - 90) * 0.0025  # 90-94: 11%-12%
+        return 0.12
+
+    def get_vix_multiplier(self):
+        """根据VIX返回美股开仓仓位系数。"""
+        now = time.time()
+        cached_vix = self._vix_cache.get('value')
+        if cached_vix is not None and now - self._vix_cache.get('timestamp', 0) < 300:
+            vix = cached_vix
+        else:
+            try:
+                from vix_fetcher import get_vix_index
+                vix = float(get_vix_index())
+            except Exception as e:
+                print(f"⚠️ 获取VIX失败，使用默认20: {e}")
+                vix = 20.0
+            self._vix_cache = {'value': vix, 'timestamp': now}
+
+        if vix < 20:
+            return 1.0, vix, 'VIX<20，正常开仓', None
+        if vix <= 25:
+            return 0.8, vix, 'VIX 20-25，仓位8折', None
+        if vix <= 30:
+            return 0.6, vix, 'VIX 25-30，仓位6折，总仓位上限不高于50%', 0.50
+        return 0.0, vix, 'VIX>30，暂停开仓', 0.0
+
+    def check_position_limits(self, account, symbol, order_value, market='us'):
+        """用实际订单金额检查单票和总仓位硬限制。"""
+        total_assets = float((account or {}).get('total_assets', 0) or 0)
+        if total_assets <= 0:
+            return {'can_add_position': False}, '总资产无效'
+
+        single_limit = self.risk_config.get(f'{market}_single_position_limit', 0.12)
+        total_limit = self.risk_config.get(f'{market}_total_position_limit', 0.40)
+        current_total_value = self.get_account_position_value(account)
+        current_symbol_value = self.get_symbol_position_value(account, symbol)
+        after_symbol_value = current_symbol_value + order_value
+        after_total_value = current_total_value + order_value
+        eps = max(1.0, total_assets * 0.0001)
+
+        result = {
+            'single_position_ok': after_symbol_value <= total_assets * single_limit + eps,
+            'total_position_ok': after_total_value <= total_assets * total_limit + eps,
+            'current_pct': current_total_value / total_assets * 100,
+            'after_total_pct': after_total_value / total_assets * 100,
+            'after_single_pct': after_symbol_value / total_assets * 100,
+            'single_limit_pct': single_limit * 100,
+            'total_limit_pct': total_limit * 100,
+        }
+        result['can_add_position'] = result['single_position_ok'] and result['total_position_ok']
+
+        if not result['single_position_ok']:
+            return result, f"单票仓位将达到{result['after_single_pct']:.1f}%，超过{result['single_limit_pct']:.1f}%上限"
+        if not result['total_position_ok']:
+            return result, f"总仓位将达到{result['after_total_pct']:.1f}%，超过{result['total_limit_pct']:.1f}%上限"
+        return result, ''
+
+    def prepare_buy_order(self, account, symbol, price, score, market='us', lot_size=1):
+        """统一买入仓位计算和下单前风控。"""
+        try:
+            price = float(price or 0)
+            total_assets = float((account or {}).get('total_assets', 0) or 0)
+            cash = float((account or {}).get('cash', 0) or 0)
+        except:
+            return {'can_buy': False, 'reason': '账户或价格数据无效', 'quantity': 0}
+
+        if price <= 0:
+            return {'can_buy': False, 'reason': '价格无效', 'quantity': 0}
+        if total_assets <= 0:
+            return {'can_buy': False, 'reason': '总资产无效', 'quantity': 0}
+        if cash <= 0:
+            return {'can_buy': False, 'reason': '现金不足', 'quantity': 0}
+
+        single_limit = self.risk_config.get(f'{market}_single_position_limit', 0.12)
+        total_limit = self.risk_config.get(f'{market}_total_position_limit', 0.40)
+        base_pct = min(self.get_score_based_position(score, market), single_limit)
+        multiplier = 1.0
+        vix = None
+        vix_reason = ''
+
+        vix_total_limit = None
+        multiplier, vix, vix_reason, vix_total_limit = self.get_vix_multiplier()
+        if multiplier <= 0:
+            return {
+                'can_buy': False,
+                'reason': f'{vix_reason} (VIX={vix:.1f})',
+                'quantity': 0,
+                'vix': vix,
+                'vix_multiplier': multiplier,
+            }
+        if vix_total_limit is not None:
+            total_limit = min(total_limit, vix_total_limit)
+
+        target_pct = min(base_pct * multiplier, single_limit)
+        target_value = total_assets * target_pct
+        current_total_value = self.get_account_position_value(account)
+        current_symbol_value = self.get_symbol_position_value(account, symbol)
+        max_single_value = max(0.0, total_assets * single_limit - current_symbol_value)
+        max_total_value = max(0.0, total_assets * total_limit - current_total_value)
+        allowed_value = min(target_value, max_single_value, max_total_value, cash)
+
+        if allowed_value <= 0:
+            current_pct = current_total_value / total_assets * 100
+            return {
+                'can_buy': False,
+                'reason': f'仓位已满或现金不足，当前总仓位{current_pct:.1f}%',
+                'quantity': 0,
+                'current_total_pct': current_pct,
+            }
+
+        raw_quantity = int(allowed_value / price)
+        lot_size = max(1, int(lot_size or 1))
+        quantity = (raw_quantity // lot_size) * lot_size
+        order_value = quantity * price
+
+        if quantity <= 0 or order_value <= 0:
+            return {
+                'can_buy': False,
+                'reason': f'按风控裁剪后数量为0，可用金额${allowed_value:,.2f}',
+                'quantity': 0,
+                'target_value': target_value,
+                'allowed_value': allowed_value,
+            }
+
+        position_check, reason = self.check_position_limits(account, symbol, order_value, market)
+        if not position_check.get('can_add_position', False):
+            return {
+                'can_buy': False,
+                'reason': reason,
+                'quantity': 0,
+                'order_value': order_value,
+                **position_check,
+            }
+
+        return {
+            'can_buy': True,
+            'quantity': quantity,
+            'raw_quantity': raw_quantity,
+            'order_value': order_value,
+            'target_value': target_value,
+            'allowed_value': allowed_value,
+            'base_pct': base_pct,
+            'target_pct': target_pct,
+            'vix': vix,
+            'vix_multiplier': multiplier,
+            'vix_reason': vix_reason,
+            **position_check,
+        }
+    
+    def calculate_stop_loss(self, symbol, multiplier=None, market='us'):
+        """计算ATR动态止损
+        
+        美股v1.6: ATR 1.8-2.0x
+        港股v2.0: ATR 1.5x
+        """
+        if not TECH_INDICATORS_AVAILABLE:
+            return None
+        
+        # 根据市场设置默认multiplier
+        if multiplier is None:
+            multiplier = 2.0 if market.lower() == 'us' else 1.5
+        
+        try:
+            if market.lower() == 'us':
+                ti = USTechIndicators()
+            else:
+                ti = HKTechIndicators()
+            
+            sl = ti.get_stop_loss(symbol, multiplier)
+            ti.close()
+            return sl
+        except:
+            return None
+    
+    def calculate_take_profit(self, symbol, multiplier=None, market='us'):
+        """计算ATR动态止盈
+        
+        美股v1.6: ATR 4.0-4.5x
+        港股v2.0: ATR 3.0x
+        """
+        if not TECH_INDICATORS_AVAILABLE:
+            return None
+        
+        # 根据市场设置默认multiplier
+        if multiplier is None:
+            multiplier = 4.0 if market.lower() == 'us' else 3.0
+        
+        try:
+            if market.lower() == 'us':
+                ti = USTechIndicators()
+            else:
+                ti = HKTechIndicators()
+            
+            tp = ti.get_take_profit(symbol, multiplier)
+            ti.close()
+            return tp
+        except:
+            return None
+    
+    def load_staged_reductions(self):
+        """读取分级减仓状态。"""
+        try:
+            with open(self.staged_reductions_file, 'r') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except:
+            return {}
+
+    def save_staged_reductions(self, staged):
+        """保存分级减仓状态。"""
+        try:
+            with open(self.staged_reductions_file, 'w') as f:
+                json.dump(staged, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"   ⚠️ 保存分级减仓状态失败: {e}")
+
+    def get_staged_key(self, symbol):
+        """分级减仓状态键。"""
+        sym = str(symbol or '').upper()
+        if sym.startswith('US.') or sym.startswith('HK.'):
+            return sym
+        return f"US.{sym}"
+
+    def get_position_price(self, pos):
+        """根据持仓市值估算当前价格。"""
+        shares = int(pos.get('shares', 0) or 0)
+        market_val = float(pos.get('market_val', 0) or 0)
+        return market_val / shares if shares > 0 else 0
+
+    def has_major_negative_alert(self, symbol):
+        """检查是否有结构化重大利空命中该标的。"""
+        try:
+            with open('/home/admin/.openclaw/workspace-stock/data/alerts.json', 'r') as f:
+                data = json.load(f)
+        except:
+            return False, ''
+
+        target = self.normalize_symbol(symbol)
+        for alert in data.get('alerts', []):
+            alert_symbol = alert.get('symbol') or ''
+            if not alert_symbol or self.normalize_symbol(alert_symbol) != target:
+                continue
+            importance = str(alert.get('importance', ''))
+            alert_type = str(alert.get('alert_type', ''))
+            title = str(alert.get('title', ''))
+            try:
+                sentiment = float(alert.get('sentiment', 0.5))
+            except:
+                sentiment = 0.5
+            is_major = importance in ('高', '重大', '高危') or '重大' in alert_type
+            is_negative = sentiment <= 0.2 or '利空' in alert_type or '利空' in title
+            if is_major and is_negative:
+                return True, title[:80] or alert_type
+        return False, ''
+
+    def check_macd_stabilized(self, symbol, market='us'):
+        """MACD是否企稳：MACD在线上方视为企稳。无法获取时按未企稳处理。"""
+        if not TECH_INDICATORS_AVAILABLE:
+            return False, '技术指标模块不可用'
+        try:
+            ti = USTechIndicators() if market == 'us' else HKTechIndicators()
+            df = ti.get_kline(symbol, 90)
+            if df is None or len(df) < 35:
+                ti.close()
+                return False, 'K线不足，MACD未确认企稳'
+            macd_data = ti.calc_macd(df['close'])
+            ti.close()
+            if not macd_data:
+                return False, 'MACD数据不足'
+            macd = macd_data['macd']
+            signal = macd_data['signal']
+            prev_macd = macd_data['prev_macd']
+            prev_signal = macd_data['prev_signal']
+            stabilized = macd >= signal and macd >= prev_macd and prev_macd >= prev_signal
+            reason = f"MACD={macd:.3f}, Signal={signal:.3f}, PrevMACD={prev_macd:.3f}"
+            return stabilized, reason
+        except Exception as e:
+            return False, f'MACD检查失败: {e}'
+
+    def mark_staged_reduction(self, symbol, sell_shares, remaining_shares, price, reason, market='us'):
+        """记录第一步减仓状态，等待30分钟后复核。"""
+        staged = self.load_staged_reductions()
+        key = self.get_staged_key(symbol)
+        staged[key] = {
+            'symbol': key,
+            'market': market,
+            'status': 'stage1_done',
+            'reason': reason,
+            'stage1_time': datetime.now().isoformat(),
+            'stage1_ts': time.time(),
+            'stage1_price': price,
+            'stage1_sell_shares': sell_shares,
+            'remaining_shares': remaining_shares,
+        }
+        self.save_staged_reductions(staged)
+
+    def clear_staged_reduction(self, symbol):
+        """清除分级减仓状态。"""
+        staged = self.load_staged_reductions()
+        key = self.get_staged_key(symbol)
+        if key in staged:
+            del staged[key]
+            self.save_staged_reductions(staged)
+
+    def tighten_staged_stop(self, symbol, current_price, market='us'):
+        """技术面企稳后保留剩余仓位，并记录1.2x ATR收紧止损线。"""
+        staged = self.load_staged_reductions()
+        key = self.get_staged_key(symbol)
+        stop_price = self.calculate_stop_loss(key, multiplier=1.2, market=market)
+        if not stop_price:
+            # 如果ATR取不到，至少用当前价下方3%作为保护线，避免状态悬空。
+            stop_price = current_price * 0.97 if current_price > 0 else 0
+        item = staged.get(key, {})
+        item.update({
+            'status': 'tightened_stop',
+            'tightened_time': datetime.now().isoformat(),
+            'tightened_ts': time.time(),
+            'tightened_stop_price': stop_price,
+            'tightened_multiplier': 1.2,
+        })
+        staged[key] = item
+        self.save_staged_reductions(staged)
+        print(f"  🛡️ {key}: 技术面企稳，保留剩余仓位，止损线收紧到1.2x ATR (${stop_price:.2f})")
+
+    def execute_position_sell(self, pos_data, shares, reason, stop_type, market='us'):
+        """执行持仓卖出并记录平仓。"""
+        shares = int(shares or 0)
+        if shares <= 0:
+            return False
+        sym = pos_data.get('symbol', '')
+        total_shares = int(pos_data.get('shares', 0) or 0)
+        price = self.get_position_price(pos_data)
+        cost_price = float(pos_data.get('cost_price', 0) or 0)
+        current_pl_pct = float(pos_data.get('pl_ratio', 0) or 0)
+        full_sym = sym if sym.startswith(('US.', 'HK.')) else f"US.{sym}"
+
+        try:
+            ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+            ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+            if ret == 0 and orders is not None:
+                pending = orders[orders['order_status'] != 'FILLED_ALL']
+                for o in pending.itertuples():
+                    if self.normalize_symbol(sym) == self.normalize_symbol(o.code):
+                        ctx.cancel_order(str(o.order_id))
+                        print(f"  撤销挂单: {o.order_id} ({o.code})")
+        except Exception as e:
+            print(f"  撤单失败: {e}")
+
+        print(f"  执行{reason}: 卖出 {full_sym} {shares}股 @ ${price:.2f}")
+        success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=[reason])
+        if success:
+            self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, reason, market, stop_type=stop_type)
+            if shares >= total_shares:
+                self.remove_open_position(full_sym)
+                self.clear_staged_reduction(full_sym)
+                self.recently_closed[sym] = time.time()
+        return success
+
+    def process_staged_exit(self, pos_data, market='us'):
+        """处理分级减仓状态。返回True表示该持仓本轮已处理。"""
+        sym = pos_data.get('symbol', '')
+        key = self.get_staged_key(sym)
+        staged = self.load_staged_reductions()
+        item = staged.get(key)
+        if not item:
+            return False
+
+        shares = int(pos_data.get('shares', 0) or 0)
+        price = self.get_position_price(pos_data)
+        if item.get('status') == 'stage1_done':
+            elapsed = time.time() - float(item.get('stage1_ts', 0) or 0)
+            if elapsed < 1800:
+                print(f"  ⏳ {key}: 分级减仓等待复核中，还需{(1800-elapsed)/60:.1f}分钟")
+                return True
+
+            stage1_price = float(item.get('stage1_price', price) or price)
+            price_continue_down = price < stage1_price
+            macd_stable, macd_reason = self.check_macd_stabilized(key, market)
+            print(f"  🔎 {key}: 30分钟复核，价格{'继续下跌' if price_continue_down else '未继续下跌'}，{macd_reason}")
+
+            if price_continue_down and not macd_stable:
+                print(f"  ⚠️ {key}: 价格继续下跌且MACD未企稳，全平剩余仓位")
+                self.execute_position_sell(pos_data, shares, '分级止损第二步全平', 'staged_stop_full_exit', market)
+            else:
+                self.tighten_staged_stop(key, price, market)
+            return True
+
+        if item.get('status') == 'tightened_stop':
+            stop_price = float(item.get('tightened_stop_price', 0) or 0)
+            if stop_price > 0 and price <= stop_price:
+                print(f"  ⚠️ {key}: 跌破1.2x ATR收紧止损线 ${stop_price:.2f}，全平剩余仓位")
+                self.execute_position_sell(pos_data, shares, '收紧止损触发全平', 'tightened_atr_stop', market)
+            else:
+                print(f"  🛡️ {key}: 分级减仓后持有，当前${price:.2f}，收紧止损${stop_price:.2f}")
+            return True
+
+        return False
+
+    def trigger_stage_one_reduction(self, pos_data, reason, market='us'):
+        """触发分级减仓第一步：先减50%。"""
+        sym = pos_data.get('symbol', '')
+        shares = int(pos_data.get('shares', 0) or 0)
+        if shares <= 0:
+            return False
+        sell_shares = max(1, shares // 2)
+        remaining = max(0, shares - sell_shares)
+        if remaining == 0:
+            return self.execute_position_sell(pos_data, shares, reason, 'staged_stop_full_for_small_position', market)
+        price = self.get_position_price(pos_data)
+        success = self.execute_position_sell(pos_data, sell_shares, f'{reason}第一步减50%', 'staged_stop_half_exit', market)
+        if success:
+            self.mark_staged_reduction(sym, sell_shares, remaining, price, reason, market)
+            print(f"  ⏳ {self.get_staged_key(sym)}: 已减50%，30分钟后复核剩余{remaining}股")
+        return success
+
+    def run(self):
+        """执行交易检查"""
+        print(f"\n{'='*60}")
+        print(f"🤖 自动交易执行器 v2.1 (技术指标版)")
+        print(f"{'='*60}")
+        # 连接Futu（如果未连接）
+        if not self.trade_ctx:
+            print("连接Futu...")
+            if not self.connect_futu():
+                print("❌ 无法连接Futu")
+                return
+        print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 检查交易时间
+        us_trading = self.check_trading_hours('us')
+        hk_trading = self.check_trading_hours('hk')
+        
+        print(f"\n交易时间状态:")
+        print(f"  美股: {'✅ 盘中' if us_trading else '⏸️ 非交易时间'}")
+        print(f"  港股: {'✅ 盘中' if hk_trading else '⏸️ 非交易时间'}")
+        
+        # 获取美股账户信息
+        us_account = None
+        hk_account = None
+        
+        if us_trading:
+            us_account = self.get_account_and_positions('us')
+            if not us_account:
+                print("❌ 无法获取美股账户信息")
+                us_trading = False
+        
+        if hk_trading:
+            hk_account = self.get_account_and_positions('hk')
+            if not hk_account:
+                print("❌ 无法获取港股账户信息")
+                hk_trading = False
+        
+        if not us_trading and not hk_trading:
+            # 仅美股非交易时间发送机会通知，港股交易时间正常交易不发
+            now_time = datetime.now().time()
+            market_status = ""
+            # 美股非交易时段划分
+            if now_time >= dt_time(4, 30) and now_time <= dt_time(8, 0):
+                market_status = "盘后"
+            elif now_time >= dt_time(16, 0) and now_time <= dt_time(21, 0):
+                market_status = "盘前"
+
+            if market_status:
+                # 加载美股机会
+                opportunities = self.get_opportunities()
+                us_high = [o for o in opportunities['us'] if o.get('score', 0) >= 90]
+
+                # 发送美股机会
+                for o in us_high[:3]:
+                    symbol = o.get('symbol', '')
+                    score = o.get('score', 0)
+                    # 冷却：24小时内同一个股票只发一次
+                    if f"opp_{symbol}" in self.recently_closed and time.time() - self.recently_closed[f"opp_{symbol}"] < 86400:
+                        continue
+                    try:
+                        from feishu_pusher import FeishuPusher
+                        pusher = FeishuPusher()
+                        # 统一使用动态评分/LLM详情，避免机会通知和买入通知口径不一致
+                        signal_details = self.build_dynamic_signal_details(
+                            symbol=f"US.{symbol}",
+                            market='us',
+                            score=score,
+                            llm_analysis=None,
+                            reasons=o.get('reasons', []),
+                        )
+                        pusher.send_opportunity_notification(
+                            symbol=f"US.{symbol}",
+                            score_total=signal_details['score_total'],
+                            score_news=signal_details['score_news'],
+                            score_announce=signal_details['score_announce'],
+                            score_community=signal_details['score_community'],
+                            score_institution=signal_details['score_institution'],
+                            signal_type=signal_details['signal_type'],
+                            llm_conclusion=signal_details['llm_conclusion'],
+                            market_status=market_status,
+                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        )
+                        self.recently_closed[f"opp_{symbol}"] = time.time()
+                        print(f"  ✅ 已发送美股{market_status}机会通知: US.{symbol} (评分{score}分)")
+                    except Exception as e:
+                        print(f"  ⚠️ 发送美股{market_status}机会通知失败: {e}")
+
+            print("⏸️ 非交易时间，仅发送机会通知")
+            return
+        
+        # 显示账户状态
+        if us_account:
+            print(f"\n📊 美股账户状态:")
+            print(f"  总资产: ${us_account['total_assets']:,.2f}")
+            print(f"  现金: ${us_account['cash']:,.2f}")
+            print(f"  持仓: {len(us_account['positions'])}只")
+        
+        if hk_account:
+            print(f"\n📊 港股账户状态:")
+            print(f"  总资产: ${hk_account['total_assets']:,.2f}")
+            print(f"  现金: ${hk_account['cash']:,.2f}")
+            print(f"  持仓: {len(hk_account['positions'])}只")
+        
+        # 止损/止盈检查：使用策略规则
+        # 规则：ATR动态止损(1.8-2.0x)、ATR动态止盈(4.0-4.5x)、RSI超买(>70)、MACD死叉、最大持仓6天
+        print(f"\n🔍 检查止损/止盈...")
+        positions_to_close = []
+        positions_to_stage_reduce = []
+        positions_to_take_profit = []
+        
+        # 只检查美股持仓（港股目前没有持仓）
+        account = us_account if us_account else {'positions': []}
+        for pos in account['positions']:
+            sym = pos.get('symbol', '')
+            shares = pos.get('shares', 0)
+            if shares <= 0:
+                continue
+            
+            # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
+            pl_pct = float(pos.get('pl_ratio', 0))  # 已经是百分比形式：-1.01 表示 -1.01%
+            
+            # 更新峰值浮盈
+            self.update_peak_profit(sym, pl_pct)
+            
+            print(f"  {sym}: 盈亏 {pl_pct:+.2f}%")
+
+            if self.process_staged_exit(pos, 'us'):
+                continue
+
+            major_negative, negative_reason = self.has_major_negative_alert(sym)
+            
+            # 止损条件：亏损超过6% 或结构化重大利空触发
+            if pl_pct < -6 or major_negative:
+                # 跳过刚平过的标的（防止重复平仓）
+                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
+                    print(f"    ⏭️ {sym} 刚平过，跳过")
+                    continue
+                positions_to_stage_reduce.append(sym)
+                if major_negative:
+                    print(f"    ⚠️ 触发分级减仓! 重大利空: {negative_reason}")
+                else:
+                    print(f"    ⚠️ 触发分级止损! (亏损{pl_pct:.2f}% > 6%)")
+            
+            # 止盈条件：盈利超过8% (ATR止盈4.0-4.5x的简化)
+            elif pl_pct > 8:
+                # 跳过刚平过的标的
+                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
+                    print(f"    ⏭️ {sym} 刚平过，跳过")
+                    continue
+                positions_to_take_profit.append(sym)
+                print(f"    🎯 触发止盈! (盈利{pl_pct:.2f}% > 8%)")
+        
+        # 执行分级减仓第一步
+        print(f"  📋 分级减仓列表: {positions_to_stage_reduce}")
+        if positions_to_stage_reduce:
+            for sym in positions_to_stage_reduce:
+                pos_data = next((p for p in account['positions'] if p.get('symbol','') == sym), None)
+                if not pos_data:
+                    print(f"  ❌ 分级减仓跳过: 未找到持仓 {sym}，当前持仓={[p.get('symbol','') for p in account['positions']]}")
+                    continue
+                self.trigger_stage_one_reduction(pos_data, '止损/重大利空触发分级减仓', 'us')
+
+        # 执行需要全平的止损
+        if positions_to_close:
+            for sym in positions_to_close:
+                pos_data = next((p for p in account['positions'] if p.get('symbol','') == sym), None)
+                if not pos_data:
+                    print(f"  ❌ 全平跳过: 未找到持仓 {sym}")
+                    continue
+                self.execute_position_sell(pos_data, int(pos_data.get('shares', 0)), '止损全平', 'max_loss_stop', 'us')
+
+        # 执行止盈
+        if positions_to_take_profit:
+            for sym in positions_to_take_profit:
+                pos_data = next((p for p in account['positions'] if p.get('symbol','').replace('US.','').replace('HK.','') == sym.replace('US.','').replace('HK.','')), None)
+                if pos_data:
+                    shares = int(pos_data.get('shares', 0))
+                    market_val = pos_data.get('market_val', 0)
+                    cost_price = pos_data.get('cost_price', 0)
+                    price = market_val / shares if shares > 0 else 0
+                    # 获取当前股票的盈亏比例
+                    current_pl_pct = float(pos_data.get('pl_ratio', 0))
+                    
+                    # 判断市场
+                    if sym.startswith('HK.'):
+                        market = 'hk'
+                        full_sym = sym
+                    else:
+                        market = 'us'
+                        full_sym = f"US.{sym}" if not sym.startswith('US.') else sym
+                    
+                    print(f"  执行止盈: 卖出 {sym} {shares}股 @ ${price:.2f}")
+                    success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=['止盈'])
+                    if success:
+                        # 保存平仓记录（使用 Futu 的成本价）
+                        self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, '止盈', market, stop_type='take_profit')
+                        # 移除入场记录
+                        self.remove_open_position(full_sym)
+                        self.recently_closed[sym] = time.time()
+        
+        # 获取机会
+        opportunities = self.get_opportunities()
+        
+        # 处理美股
+        if us_trading and us_account:
+            us_high = [o for o in opportunities['us'] if o.get('score', 0) >= self.config['min_score']]
+            print(f"\n🇺🇸 美股高评分({self.config['min_score']}分+): {len(us_high)}只")
+            
+            for o in us_high[:3]:
+                symbol = o.get('symbol', '')
+                price = o.get('price', 0)
+                score = o.get('score', 0)
+                
+                # 检查扫描器中LLM是否未通过
+                if not o.get('llm_passed', True):
+                    print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
+                    continue
+                
+                futu_symbol = f"US.{symbol}"
+                should, reason = self.should_trade(futu_symbol, us_account['positions'], us_account.get('pending_orders', []))
+                
+                if should:
+                    # ===== v1.6 技术指标检查 =====
+                    # 检查技术信号（美股: MA趋势、RSI、成交量、MACD）
+                    tech_signals = self.check_technical_signals(symbol, market='us')
+                    
+                    if not tech_signals.get('can_enter', False):
+                        print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
+                        for r in tech_signals.get('reasons', []):
+                            print(f"      {r}")
+                        continue  # 跳过不满足技术条件的股票
+                    
+                    order_plan = self.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
+                    if not order_plan.get('can_buy'):
+                        print(f"  ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
+                        continue
+
+                    quantity = order_plan['quantity']
+                    print(
+                        f"  💰 {symbol}: 评分仓位{order_plan['base_pct']*100:.1f}% "
+                        f"× VIX系数{order_plan.get('vix_multiplier', 1):.1f} "
+                        f"→ 实际金额${order_plan['order_value']:,.2f}, "
+                        f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
+                    )
+                    # 构建开仓原因列表
+                    entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
+                    success = self.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', score=score, reasons=entry_reasons)
+                    if success:
+                        # 更新持仓计数和本轮内存市值，避免同一轮连续突破总仓位
+                        us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
+                        us_account['market_val'] = us_account['total_assets'] * order_plan['after_total_pct'] / 100
+                        us_account['cash'] = max(0, us_account.get('cash', 0) - order_plan['order_value'])
+                        if len(us_account['positions']) >= self.config['max_positions']:
+                            break
+                else:
+                    print(f"  ⏭️ {symbol}: {reason}")
+        
+        # 处理港股
+        if hk_trading and hk_account:
+            hk_high = [o for o in opportunities['hk'] if o.get('base_score', 0) >= self.config['min_score']]
+            print(f"\n🇭🇰 港股高评分({self.config['min_score']}分+): {len(hk_high)}只")
+            
+            # 检查港股持仓数限制
+            if len(hk_account['positions']) >= self.hk_config.get('max_positions', 10):
+                print(f"⚠️ 港股已达最大持仓数 {self.hk_config.get('max_positions', 10)}，不执行新交易")
+                return
+            
+            for o in hk_high[:3]:
+                symbol = o.get('symbol', '')
+                price = o.get('price', 0)
+                score = o.get('base_score', 0)
+                
+                # 检查扫描器中LLM是否未通过
+                if not o.get('llm_passed', True):
+                    print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
+                    continue
+                
+                should, reason = self.should_trade(symbol, hk_account['positions'], hk_account.get('pending_orders', []))
+                
+                if should:
+                    # ===== 港股v2.0 技术指标检查 =====
+                    # 检查技术信号（港股: MA20趋势、RSI 35-70、成交量1.5x、增强信号）
+                    tech_signals = self.check_technical_signals(symbol, market='hk')
+                    
+                    if not tech_signals.get('can_enter', False):
+                        print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
+                        for r in tech_signals.get('reasons', []):
+                            print(f"      {r}")
+                        continue
+                    
+                    lot_size = self._get_hk_lot_size(symbol)
+                    order_plan = self.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
+                    if not order_plan.get('can_buy'):
+                        print(f"  ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
+                        continue
+
+                    quantity = order_plan['quantity']
+                    print(
+                        f"  💰 {symbol}: 价格{price}, 原始数量{order_plan['raw_quantity']}, "
+                        f"整手数量{quantity}(每手{lot_size}), 实际金额${order_plan['order_value']:,.2f}, "
+                        f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
+                    )
+                    # 构建开仓原因列表
+                    entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
+                    success = self.execute_trade(symbol, 'BUY', quantity, price, 'hk', score=score, reasons=entry_reasons)
+                    if success:
+                        hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
+                        hk_account['market_val'] = hk_account['total_assets'] * order_plan['after_total_pct'] / 100
+                        hk_account['cash'] = max(0, hk_account.get('cash', 0) - order_plan['order_value'])
+                        if len(hk_account['positions']) >= self.hk_config.get('max_positions', 10):
+                            break
+                else:
+                    print(f"  ⏭️ {symbol}: {reason}")
+        
+        print(f"\n{'='*60}")
+        print(f"✅ 检查完成")
+        print(f"{'='*60}")
+    
+    def llm_analysis_before_trade(self, symbol, price, market='us'):
+        """下单前的LLM分析
+        
+        触发条件：基础评分 ≥ 70分
+        使用 ModelStudio API (qwen-plus) 进行分析
+        """
+        try:
+            # 导入LLM调用模块
+            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            from llm_stock_analyzer import analyze_stock as llm_analyze
+            
+            # 准备股票数据（从行情获取更完整的数据）
+            stock_data = {
+                'symbol': symbol,
+                'market': market,
+                'price': price,
+                'change_pct': 0,  # 涨跌幅
+                'ma20': 0,
+                'ma50': 0,
+                'rsi': 50,
+                'macd': '未知',
+                'volume_ratio': 1.0,
+                'atr': 0,
+                'news_count': 0,
+                'sentiment': '中性',
+                'base_score': 75  # 假设基础评分
+            }
+            
+            # 尝试从行情获取更多数据
+            try:
+                from futu import OpenQuoteContext
+                ctx = OpenQuoteContext('127.0.0.1', 11111)
+                ret, snapshot = ctx.get_market_snapshot([symbol])
+                if ret == 0 and not snapshot.empty:
+                    row = snapshot.iloc[0]
+                    stock_data['change_pct'] = float(row.get('change_rate', 0))
+                    stock_data['volume_ratio'] = float(row.get('volume_ratio', 1.0)) if 'volume_ratio' in row else 1.0
+                ctx.close()
+            except:
+                pass
+            
+            # 调用LLM分析
+            result = llm_analyze(symbol, stock_data)
+            
+            print(f"\n🧠 LLM分析结果:")
+            print(f"   基础评分: {result.get('base_score', 0)}")
+            print(f"   评分调整: {result.get('score_adjust', 0):+d}")
+            print(f"   最终评分: {result.get('final_score', 0)}")
+            print(f"   理由: {result.get('llm_reason', 'N/A')}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ LLM分析失败: {e}")
+            # LLM分析失败时，必须阻止交易
+            return {'final_score': 0, 'llm_reason': f'LLM分析失败: {e}', 'passed': False}
+    
+    def send_notification(self, message):
+        """发送通知到飞书"""
+        try:
+            with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
+                keys = json.load(f)
+            
+            # 获取token
+            url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
+            res = requests.post(url, json={
+                "app_id": keys['feishu']['appId'],
+                "app_secret": keys['feishu']['appSecret']
+            }, timeout=10)
+            
+            if res.status_code == 200 and res.json().get('code') == 0:
+                token = res.json().get('tenant_access_token')
+                
+                # 发送消息
+                url = "https://open.feishu.cn/open-apis/im/v1/messages"
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+                params = {"receive_id_type": "chat_id"}
+                data = {
+                    "receive_id": self.feishu_chat_id or "oc_f6c5168cb212e624d21ccfabed49b083",
+                    "msg_type": "text",
+                    "content": json.dumps({"text": message})
+                }
+                res = requests.post(url, headers=headers, params=params, json=data, timeout=10)
+                result = res.json()
+                if res.status_code == 200 and result.get('code') == 0:
+                    print("✅ 通知已发送到飞书")
+                else:
+                    print(f"⚠️ 飞书发送失败: {result.get('code')} {result.get('msg', '')}")
+        except Exception as e:
+            print(f"⚠️ 发送通知失败: {e}")
+
+if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--daemon', action='store_true', help='守护进程模式（每秒运行）')
+    args = parser.parse_args()
+    
+    if args.daemon:
+        # 守护进程模式
+        print("=" * 60)
+        print("🚀 自动交易守护进程启动 (每秒检查)")
+        print("=" * 60)
+        
+        trader = AutoTrader()
+        
+        # 连接一次
+        if not trader.connect_futu():
+            print("无法连接富途，退出")
+            exit(1)
+        
+        print("✅ 就绪，每秒检查交易机会...")
+        print("⚠️ 按 Ctrl+C 停止")
+        print("=" * 60)
+        
+        last_positions = []
+        
+        while True:
+            try:
+                now = datetime.now().strftime("%H:%M:%S")
+                
+                # 检查交易时段
+                us_trading = trader.check_trading_hours('us')
+                hk_trading = trader.check_trading_hours('hk')
+                
+                if not us_trading and not hk_trading:
+                    time.sleep(1)
+                    continue
+                
+                # 获取账户信息
+                us_account = None
+                hk_account = None
+                
+                if us_trading:
+                    us_account = trader.get_account_and_positions('us')
+                if hk_trading:
+                    hk_account = trader.get_account_and_positions('hk')
+                
+                if not us_account and not hk_account:
+                    print(f"[{now}] ⚠️ 无可用账户，跳过")
+                    time.sleep(1)
+                    continue
+                
+                print(f"[{now}] ✅ 账户获取成功: 美股={'是' if us_account else '否'}, 港股={'是' if hk_account else '否'}")
+                
+                # ===== 止损/止盈检查 =====
+                if us_account and us_account.get('positions'):
+                    print(f"[{now}] 🔍 检查止损/止盈...")
+                    for pos in us_account['positions']:
+                        sym = pos.get('symbol', '')
+                        shares = pos.get('shares', 0)
+                        if shares <= 0:
+                            continue
+                        
+                        # 跳过最近尝试过平仓的标的（避免频繁下单）
+                        if sym in trader.recently_closed:
+                            age = time.time() - trader.recently_closed[sym]
+                            if age < 86400:  # 24小时冷却期
+                                print(f"[{now}]   {sym}: 冷却中({age:.0f}s)，跳过")
+                                continue
+                        
+                        # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
+                        pl_pct = float(pos.get('pl_ratio', 0))
+                        market_val = pos.get('market_val', 0)
+                        price = market_val / shares if shares > 0 else 0
+                        
+                        print(f"[{now}]   {sym}: 盈亏 {pl_pct:+.2f}%")
+
+                        if trader.process_staged_exit(pos, 'us'):
+                            continue
+
+                        major_negative, negative_reason = trader.has_major_negative_alert(sym)
+                        
+                        # 止损/重大利空：先分级减仓50%，30分钟后复核
+                        if pl_pct < -6 or major_negative:
+                            if major_negative:
+                                print(f"[{now}]   ⚠️ 触发分级减仓! 重大利空: {negative_reason}")
+                            else:
+                                print(f"[{now}]   ⚠️ 触发分级止损! (亏损{pl_pct:.2f}% > 6%)")
+                            success = trader.trigger_stage_one_reduction(pos, '止损/重大利空触发分级减仓', 'us')
+                            if success:
+                                print(f"[{now}]   ✅ 分级减仓第一步完成: {sym}")
+                            else:
+                                print(f"[{now}]   ❌ 分级减仓失败，将继续监控")
+                        # 止盈：盈利超过8%
+                        elif pl_pct > 8:
+                            print(f"[{now}]   🎯 触发止盈! (盈利{pl_pct:.2f}% > 8%)")
+                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[f'止盈触发：盈利{pl_pct:.2f}% > 8%'])
+                            if success:
+                                print(f"[{now}]   ✅ 止盈完成: {sym}")
+                            else:
+                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
+                                trader.recently_closed[sym] = time.time()
+                
+                # 获取机会
+                opportunities = trader.get_opportunities()
+                
+                # 美股交易
+                if us_trading and us_account:
+                    us_high = [o for o in opportunities['us'] if o.get('score', 0) >= trader.us_config.get('min_score', 80)]
+                    us_positions = [p.get('symbol') for p in us_account.get('positions', [])]
+                    
+                    for o in us_high[:1]:
+                        symbol = o.get('symbol', '')
+                        futu_symbol = f"US.{symbol}"
+                        should, reason = trader.should_trade(futu_symbol, us_account.get('positions', []), us_account.get('pending_orders', []))
+                        if not should:
+                            print(f"[{now}] ⏭️ {symbol}: {reason}")
+                            continue
+                        
+                        price = o.get('price', 0)
+                        score = o.get('score', 0)
+                        order_plan = trader.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
+                        if not order_plan.get('can_buy'):
+                            print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
+                            continue
+                        
+                        quantity = order_plan['quantity']
+                        print(
+                            f"[{now}] 🎯 买入 {symbol} (评分{score}, ${price}, 数量{quantity}, "
+                            f"金额${order_plan['order_value']:,.2f}, 总仓位{order_plan['after_total_pct']:.1f}%)"
+                        )
+                        success = trader.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', score=score, reasons=o.get('reasons', []))
+                        if success:
+                            us_positions.append(futu_symbol)
+                            us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
+                            us_account['market_val'] = us_account['total_assets'] * order_plan['after_total_pct'] / 100
+                            us_account['cash'] = max(0, us_account.get('cash', 0) - order_plan['order_value'])
+                
+                # 港股交易
+                if hk_trading and hk_account:
+                    hk_high = [o for o in opportunities['hk'] if o.get('base_score', 0) >= trader.hk_config.get('min_score', 70)]
+                    hk_positions = [p.get('symbol') for p in hk_account.get('positions', [])]
+                    
+                    print(f"[{now}] 🇭🇰 港股高评分: {len(hk_high)}只, 持仓: {len(hk_positions)}只")
+                    
+                    for o in hk_high[:1]:
+                        symbol = o.get('symbol', '')
+                        print(f"[{now}] 🔍 检查 {symbol}")
+                        should, reason = trader.should_trade(symbol, hk_account.get('positions', []), hk_account.get('pending_orders', []))
+                        if not should:
+                            print(f"[{now}] ⏭️ {symbol}: {reason}")
+                            continue
+                        
+                        price = o.get('price', 0)
+                        score = o.get('base_score', 0)
+                        
+                        print(f"[{now}] 💰 {symbol} 价格: {price}, 评分: {score}")
+                        
+                        lot_size = trader._get_hk_lot_size(symbol)
+                        order_plan = trader.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
+                        if not order_plan.get('can_buy'):
+                            print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
+                            continue
+                        
+                        quantity = order_plan['quantity']
+                        print(
+                            f"[{now}] 📊 仓位计算: 目标${order_plan['target_value']:,.2f}, "
+                            f"允许${order_plan['allowed_value']:,.2f}, 原始{order_plan['raw_quantity']}股 "
+                            f"-> {quantity}股(每手{lot_size})"
+                        )
+                        print(f"[{now}] 🎯 买入 {symbol} (评分{score}, 价格{price}, 数量{quantity})")
+                        success = trader.execute_trade(symbol, 'BUY', quantity, price, 'hk', score=score, reasons=o.get('reasons', []))
+                        if success:
+                            hk_positions.append(symbol)
+                            hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
+                            hk_account['market_val'] = hk_account['total_assets'] * order_plan['after_total_pct'] / 100
+                            hk_account['cash'] = max(0, hk_account.get('cash', 0) - order_plan['order_value'])
+                            print(f"[{now}] ✅ 买入成功: {symbol}")
+                        else:
+                            print(f"[{now}] ❌ 买入失败: {symbol}")
+                
+                time.sleep(1)
+                
+            except KeyboardInterrupt:
+                print("\n🛑 守护进程停止")
+                break
+            except Exception as e:
+                print(f"⚠️ 错误: {e}")
+                time.sleep(1)
+    else:
+        # 单次运行
+        trader = AutoTrader()
+        try:
+            trader.run()
+        finally:
+            for ctx in (getattr(trader, 'quote_ctx', None), getattr(trader, 'trade_ctx', None), getattr(trader, 'hk_trade_ctx', None)):
+                try:
+                    if ctx:
+                        ctx.close()
+                except Exception:
+                    pass

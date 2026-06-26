@@ -1,0 +1,43 @@
+# === workspace-stock 定时任务 ===
+
+# 港股扫描器 - 8:50开启，交易时段每5分钟
+50 8-12,13-16 * * 1-5 flock -n /tmp/hk-scanner.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/hk-scanner.py >> /home/admin/.openclaw/workspace-stock/logs/hk-scanner.log 2>&1
+
+# 港股日报 - 16:10
+10 16 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/daily-report-to-feishu.py >> /home/admin/.openclaw/workspace-stock/logs/hk-daily.log 2>&1
+
+# 港股优化 - 17:00
+0 17 * * 1-5 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/hk-optimizer.py >> /home/admin/.openclaw/workspace-stock/logs/hk-optimizer.log 2>&1
+
+# 港股自动交易 - 交易时段每15分钟
+*/15 9-12,13-16 * * 1-5 flock -n /tmp/auto-trader.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/auto-trader.py >> /home/admin/.openclaw/workspace-stock/logs/auto-trader.log 2>&1
+
+# 美股扫描器 - 21-23点, 0-4点 每10分钟
+*/10 21-23,0-4 * * 2-6 flock -n /tmp/us-scanner.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/us-scanner.py >> /home/admin/.openclaw/workspace-stock/logs/us-scanner.log 2>&1
+
+# 美股日报 - 04:30
+30 4 * * 2-6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/daily-report-to-feishu.py --us >> /home/admin/.openclaw/workspace-stock/logs/us-daily.log 2>&1
+
+# 美股优化 - 05:00
+0 5 * * 2-6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/us-optimizer.py >> /home/admin/.openclaw/workspace-stock/logs/us-optimizer.log 2>&1
+
+# 美股自动交易 - 21-23点, 0-4点 每15分钟 (已恢复)
+*/15 21-23,0-4 * * 2-6 flock -n /tmp/auto-trader-us.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/auto-trader.py >> /home/admin/.openclaw/workspace-stock/logs/auto-trader.log 2>&1
+
+# 账户同步 - 每10分钟
+*/10 * * * * flock -n /tmp/sync-futu-account.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/sync-futu-account.py >> /home/admin/.openclaw/workspace-stock/logs/sync.log 2>&1
+
+# 新闻资讯 - 每1分钟
+*/1 * * * * flock -n /tmp/news-pipeline.lock /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/news_pipeline.py --cron >> /home/admin/.openclaw/workspace-stock/logs/news-pipeline.log 2>&1
+
+# 心跳检查 - 每3分钟
+*/3 * * * * /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/heartbeat-check.py >> /home/admin/.openclaw/workspace-stock/logs/heartbeat.log 2>&1
+
+# 周报 - 周六15:00
+0 15 * * 6 /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/generate-weekly-report.py >> /home/admin/.openclaw/workspace-stock/logs/weekly.log 2>&1
+
+# === workspace-gold-crow 期权系统 ===
+# 15 21 * * 2-6 /home/admin/.openclaw/workspace-gold-crow/options/start-trader.sh
+# */5 21-23,0-5 * * 2-6 /home/admin/.openclaw/workspace-gold-crow/options/watchdog.sh
+# 15 4 * * 2-6 /usr/bin/python3 /home/admin/.openclaw/workspace-gold-crow/options/daily_report.py >> /tmp/gold-crow-report.log 2>&1
+10 16 28-31 * * [ $(date +\%d -d tomorrow) = 01 ] && /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 /home/admin/.openclaw/workspace-stock/strategy/generate-monthly-report.py >> /home/admin/.openclaw/workspace-stock/logs/monthly.log 2>&1

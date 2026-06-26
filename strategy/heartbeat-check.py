@@ -27,7 +27,7 @@ def check_opportunities():
     """检查交易机会"""
     try:
         workspace_dir = '/home/admin/.openclaw/workspace-stock'
-        opportunities_path = os.path.join(workspace_dir, 'data/opportunities.json')
+        opportunities_path = os.path.join(workspace_dir, 'data/us-opportunities.json')
         with open(opportunities_path, 'r') as f:
             data = json.load(f)
         
@@ -71,12 +71,27 @@ def check_alerts():
         if 'time' in data:
             alert_time = data['time'][:19]  # 取到秒
             alert_dt = datetime.datetime.strptime(alert_time, "%Y-%m-%dT%H:%M:%S")
-            now_dt = datetime.datetime.utcnow()
+            now_dt = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
             hours_diff = (now_dt - alert_dt).total_seconds() / 3600
             return hours_diff
         return 999  # 表示数据异常
     except Exception as e:
         return 999
+
+def check_llm_api():
+    """检查 LLM API 是否可用。挂了返回 (False, 错误消息)。"""
+    try:
+        from llm_stock_analyzer import LLMClient
+        client = LLMClient()
+        if not client.api_key or client.api_key.startswith('sk-xxx'):
+            return False, f"LLM API Key 未配置 (model={client.model})"
+        result = client.call('ping', max_tokens=5, temperature=0)
+        if result is None:
+            return False, f"LLM 调用返回 None (model={client.model}/{client.fallback_model})"
+        return True, f"LLM OK (model={client.model})"
+    except Exception as e:
+        return False, f"LLM 检查异常: {e}"
+
 
 def check_futu_opend():
     """检查 Futu OpenD 是否运行，如果没运行则重启"""
@@ -127,7 +142,7 @@ def send_to_feishu(message):
             return False
         
         # 发送消息到群聊
-        msg_url = "https://open.feishu.cn/open-apis/im/v1/messages"
+        msg_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
@@ -156,6 +171,9 @@ def main():
     # 0. 检查 Futu OpenD
     futu_ok, futu_msg = check_futu_opend()
     
+    # 0.5 检查 LLM API（挂了自动下单会被限住，必报）
+    llm_ok, llm_msg = check_llm_api()
+    
     # 1. 检查待发日报
     pending_reports = check_pending_reports()
     
@@ -172,6 +190,8 @@ def main():
     issues = []
     if not futu_ok:
         issues.append(f"Futu OpenD: {futu_msg}")
+    if not llm_ok:
+        issues.append(f"⚠️ LLM API 不可用 → 自动开仓已阅阈断 ({llm_msg})")
     if pending_reports > 0:
         issues.append(f"{pending_reports}个日报待发")
     if alert_age > 24:
@@ -195,6 +215,11 @@ def main():
             print(f"✅ Futu OpenD: {futu_msg}")
         else:
             print(f"🚨 Futu OpenD: {futu_msg}")
+        
+        if llm_ok:
+            print(f"✅ {llm_msg}")
+        else:
+            print(f"🚨 {llm_msg}")
         
         if pending_reports > 0:
             print(f"🚨 有 {pending_reports} 个日报待发")

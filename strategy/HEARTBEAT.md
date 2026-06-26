@@ -8,7 +8,7 @@
 - 汇报后移动到 data/sent-reports/
 
 ### 2. 交易机会扫描
-- 检查 data/opportunities.json
+- 检查 data/us-opportunities.json
 - 有评分≥70的机会 → 主动汇报
 - 检查 data/hk-opportunities.json
 

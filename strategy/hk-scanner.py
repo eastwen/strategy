@@ -85,7 +85,7 @@ class HKScanner:
     
     def load_config(self):
         """加载策略配置"""
-        with open('/home/admin/.openclaw/workspace-stock/config/hk-strategy-dynamic-v2.0.json', 'r') as f:
+        with open('/home/admin/.openclaw/workspace-stock/config/hk-strategy.json', 'r') as f:
             self.config = json.load(f)
     
     def get_market_sentiment(self):
@@ -215,7 +215,8 @@ class HKScanner:
         tech_score = self.check_technical_conditions(stock_data, price, prev_close, volume)
         score += tech_score
         
-        return min(100, max(0, score))
+        # 2026-06-19 east 修复 Bug1: base_score 上限从 100 改为 90，给 LLM 预留 10 分调整空间
+        return min(90, max(0, score))
     
     def get_stock_sector(self, stock_code, stock_name):
         """根据股票代码或名称判断所属行业"""
@@ -668,9 +669,54 @@ class HKScanner:
         else:
             print(f"   💰 账户购买力: ${buying_power:,.0f}")
         
+        # 🎯 四源补算覆盖候选池；LLM 仍只处理评分最高的前 10 只（剩下的直接用基础分，避免烧token）
+        TOP_LLM_N = 10
+        # results 已按 base_score 倒序，拍一下前几只的 symbol 作为名单
+        top_llm_set = {(r.get('symbol') or '') for r in results[:TOP_LLM_N]}
+        if not skip_llm:
+            print(f"   🧠 LLM 仅处理评分 Top {TOP_LLM_N}")
+        
         for candidate in results:
-            # 只分析基础评分>=70的候选
+            # 候选池内统一跑真实四源评分；LLM 仍只处理 Top10 名单
             if candidate.get('base_score', 0) >= 70:
+                # 2026-06-24 east 新增：给 Top N 跑真实四源评分（不是硬拆）
+                sym_clean = (candidate.get('symbol') or '').replace('HK.', '').lstrip('0') or '0'
+                try:
+                    sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+                    from four_source_scorer import score_all as _fs_score_all
+                    fs = _fs_score_all(sym_clean, 'hk')
+                    candidate['score_news'] = fs['score_news']
+                    candidate['score_announce'] = fs['score_announce']
+                    candidate['score_community'] = fs['score_community']
+                    candidate['score_institution'] = fs['score_institution']
+                    candidate['available_news'] = fs['available_news']
+                    candidate['available_announce'] = fs['available_announce']
+                    candidate['available_community'] = fs['available_community']
+                    candidate['available_institution'] = fs['available_institution']
+                    candidate['evidence_news'] = fs['evidence_news']
+                    candidate['evidence_announce'] = fs['evidence_announce']
+                    candidate['evidence_community'] = fs['evidence_community']
+                    candidate['evidence_institution'] = fs['evidence_institution']
+                    candidate['four_source_total'] = fs['score_total']
+                    candidate['four_source_available_count'] = fs['available_count']
+                    print(f"   📊 {candidate.get('symbol')} 四源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']} (总{fs['score_total']}, 覆盖{fs['available_count']}/4)")
+
+                    # 2026-06-24 east 关键：让扫描器评分跟通知一致
+                    if fs['available_count'] >= 3:
+                        candidate['base_score_legacy'] = candidate.get('base_score', 70)
+                        candidate['base_score'] = fs['score_total']
+                        candidate['score'] = fs['score_total']
+                        candidate['scoring_mode'] = 'four_source_real'
+                        print(f"   ✅ {candidate.get('symbol')} 采用真四源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
+                    else:
+                        candidate['base_score_legacy'] = candidate.get('base_score', 70)
+                        candidate['base_score'] = int(candidate.get('base_score', 70) * 0.8)
+                        candidate['score'] = candidate['base_score']
+                        candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/4 <3)'
+                        print(f"   ⚠️ {candidate.get('symbol')} 覆盖不足，降级为 base_score×0.8 = {candidate['base_score']}")
+                except Exception as e:
+                    print(f"   ⚠️ {candidate.get('symbol')} 四源评分失败: {e}")
+
                 # 购买力不足时跳过LLM分析，直接用基础评分
                 if skip_llm:
                     candidate['final_score'] = candidate.get('base_score', 70)
@@ -712,7 +758,10 @@ class HKScanner:
             else:
                 candidate['final_score'] = candidate.get('base_score', 70)
                 candidate['llm_adjust'] = 0
-                candidate['llm_reason'] = ''
+                if candidate.get('base_score', 0) < 70:
+                    candidate['llm_reason'] = ''
+                else:
+                    candidate['llm_reason'] = f'评分未进入 Top{TOP_LLM_N}，跳过 LLM'
                 candidate['llm_passed'] = True  # 未达到LLM分析阈值，默认通过
             
             # 只保留最终评分>=65的
@@ -803,7 +852,18 @@ class HKScanner:
                 raw_quantity = int(position_size / price) if price > 0 else 0
                 lot_size = trader._get_hk_lot_size(symbol)
                 quantity = (raw_quantity // lot_size) * lot_size  # 整手交易
-                
+                order_value = quantity * price
+
+                if quantity <= 0:
+                    print(f"   ⏭️ {symbol}: 计算后股数为 0，跳过")
+                    continue
+
+                # 仓位风控：单票/总仓位上限（与美股扫描器对齐）
+                position_check, position_reason = trader.check_position_limits(account, symbol, order_value, market='hk')
+                if not position_check.get('can_add_position', False):
+                    print(f"   ⏭️ {symbol}: {position_reason or '仓位已满'}")
+                    break
+
                 if quantity > 0:
                     print(f"\n   🎯 准备买入 {symbol}")
                     print(f"      价格: ${price:.2f}")
@@ -816,8 +876,7 @@ class HKScanner:
                         symbol, 'BUY', quantity, price, 'hk', 
                         skip_llm=True,  # 跳过重复LLM分析
                         score=score, 
-                        reasons=entry_reasons,
-                        opportunity=opp
+                        reasons=entry_reasons
                     )
                     
                     if success:

@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 
 sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
-from futu import OpenQuoteContext, OpenSecTradeContext, OpenHKTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
+from futu import OpenQuoteContext, OpenSecTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
 
 def safe_float(val, default=0.0):
     """安全转换浮点数"""
@@ -98,7 +98,9 @@ def sync_futu_account():
         trade_ctx_us.close()
         
         # ========== 港股账户 ==========
-        trade_ctx_hk = OpenHKTradeContext(host='127.0.0.1', port=11111)
+        # 2026-06-26 east: futu-api 10.8+ 弃用了 OpenHKTradeContext，统一用 OpenSecTradeContext + filter_trdmarket=TrdMarket.HK
+        trade_ctx_hk = OpenSecTradeContext(filter_trdmarket=TrdMarket.HK, host='127.0.0.1', port=11111,
+                                            security_firm=SecurityFirm.FUTUSECURITIES)
         # 港股可能不需要解锁，或者解锁密码不同，先尝试不解锁直接查询
         ret_unlock = RET_OK
         if ret_unlock == RET_OK:

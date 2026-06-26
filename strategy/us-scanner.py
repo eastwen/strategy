@@ -25,6 +25,12 @@ class USScanner:
         self.load_stock_pool(limit=self.scan_limit)
         self.load_config()
         self.data_source = 'finnhub'
+        # 可选的 Futu 行情上下文（扫描器本身不创建，避免总是接 OpenD）
+        self.quote_ctx = None
+        # 市场情绪指标缓存（一次扫描只算一次，避免对 5251 只股票重复调用 VIX/CNN/期权 API）
+        self._sentiment_cache = None
+        self._sentiment_cache_time = 0
+        self._sentiment_cache_ttl = 1800  # 30 分钟过期
 
     def load_api_keys(self):
         """加载API密钥"""
@@ -97,7 +103,7 @@ class USScanner:
 
     def load_config(self):
         """加载策略配置"""
-        with open('/home/admin/.openclaw/workspace-stock/config/us-strategy-v1.6.json', 'r') as f:
+        with open('/home/admin/.openclaw/workspace-stock/config/us-strategy.json', 'r') as f:
             self.config = json.load(f)
 
     def get_buying_power(self):
@@ -143,31 +149,36 @@ class USScanner:
         return sentiment_map
 
     def should_scan(self):
-        """判断是否应该扫描(夏令时北京时间)"""
+        """判断是否应该扫描
+
+        策略：美股 24 小时全天扫描，仅非交易日跳过。
+        “非交易日”含义：周末、美股节假日。其余时间都会扫，拿到什么算什么。
+        """
         now = datetime.now()
         current_time = now.time()
 
-        # 首先检查是否为交易日
+        # 仅以交易日为判断依据，无论盘中/盘后/盘前都扫
         try:
             from trading_calendar import TradingCalendar
             calendar = TradingCalendar()
             is_trading_day, reason = calendar.is_us_trading_day(now)
             if not is_trading_day:
                 return False, f"非交易日 ({reason})"
-        except:
-            pass  # 如果交易日历检查失败,继续时间判断
+        except Exception:
+            pass  # 交易日历不可用 → 默认扫描，不丢过机会
 
-        # 盘中: 21:00-次日04:00 (当晚到凌晨)
+        # 返回详细的市场阶段标签（仅供日志用）
         if current_time >= dt_time(21, 0):
-            return True, "盘中"
-        if current_time <= dt_time(4, 0):
-            return True, "盘中"
-
-        # 盘后: 04:00-08:00 (第二天凌晨)
-        if dt_time(4, 0) <= current_time <= dt_time(7, 59):
-            return True, "盘后"
-
-        return False, "非扫描时间"
+            label = "盘中"
+        elif current_time <= dt_time(4, 0):
+            label = "盘中"
+        elif dt_time(4, 0) <= current_time <= dt_time(7, 59):
+            label = "盘后"
+        elif dt_time(8, 0) <= current_time <= dt_time(16, 59):
+            label = "休市 (24h扫描)"
+        else:
+            label = "盘前"
+        return True, label
 
     def calculate_score(self, price, prev_close, change_pct, news_sentiment=None):
         """计算评分(包含技术面和市场情绪)"""
@@ -193,7 +204,8 @@ class USScanner:
         emotion_score = self.calculate_market_sentiment(news_sentiment)
         score += emotion_score
 
-        return min(100, max(0, score))
+        # 2026-06-19 east 修复 Bug1: base_score 上限从 100 改为 90，给 LLM 预留 10 分调整空间
+        return min(90, max(0, score))
 
     def calculate_market_sentiment(self, news_sentiment=None):
         """市场情绪综合评分
@@ -205,49 +217,54 @@ class USScanner:
         - 期权比例: 10%
         
         返回: +/-15分范围
-        """
-        emotion_score = 0
         
-        # 1. 新闻情绪 (权重 40%)
+        性能优化：VIX/CNN/期权 都是市场级别指标，一次扫描只算一次，结果缓存 30 分钟
+        避免对 5251 只股票重复调用同一个 API（API 限流 + 垃圾日志污染）
+        """
+        import time as _time
+        # 1. 新闻情绪是每只股票独有的，必须每次重算
+        news_part = 0
         if news_sentiment:
             if news_sentiment > 0.6:  # 正面新闻
-                emotion_score += 6  # +15*0.4
+                news_part = 6  # +15*0.4
             elif news_sentiment < 0.4:  # 负面新闻
-                emotion_score -= 4  # -10*0.4
-        
-        # 2. VIX恐慌指数 (权重 30%)
-        try:
-            vix = self.get_vix_realtime()
-            if vix >= 30:  # 极度恐慌
-                emotion_score -= 9  # -30*0.3
-            elif vix >= 25:  # 恐慌
-                emotion_score -= 5  # -15*0.3
-            elif vix <= 15:  # 平静
-                emotion_score += 6  # +20*0.3
-        except:
-            pass  # 获取失败不影响评分
-        
-        # 3. CNN恐慌贪婪 (权重 20%)
-        try:
-            cnn_score = self.get_cnn_fear_greed_realtime()
-            if cnn_score <= 25:  # 极度恐惧
-                emotion_score -= 4  # -20*0.2
-            elif cnn_score >= 75:  # 贪婪
-                emotion_score += 3  # +15*0.2
-        except:
-            pass  # 获取失败不影响评分
-        
-        # 4. 期权比例 (权重 10%)
-        try:
-            option_ratio = self.get_option_ratio_realtime()
-            if option_ratio >= 1.2:  # 看多
-                emotion_score += 1.5  # +15*0.1
-            elif option_ratio <= 0.8:  # 看空
-                emotion_score -= 1.5  # -15*0.1
-        except:
-            pass  # 获取失败不影响评分
-        
-        return emotion_score
+                news_part = -4  # -10*0.4
+
+        # 2. 市场级别指标从缓存拿
+        now = _time.time()
+        if self._sentiment_cache is None or (now - self._sentiment_cache_time) > self._sentiment_cache_ttl:
+            market_part = 0
+            try:
+                vix = self.get_vix_realtime()
+                if vix >= 30:
+                    market_part -= 9
+                elif vix >= 25:
+                    market_part -= 5
+                elif vix <= 15:
+                    market_part += 6
+            except Exception:
+                pass
+            try:
+                cnn_score = self.get_cnn_fear_greed_realtime()
+                if cnn_score <= 25:
+                    market_part -= 4
+                elif cnn_score >= 75:
+                    market_part += 3
+            except Exception:
+                pass
+            try:
+                option_ratio = self.get_option_ratio_realtime()
+                if option_ratio >= 1.2:
+                    market_part += 1.5
+                elif option_ratio <= 0.8:
+                    market_part -= 1.5
+            except Exception:
+                pass
+            self._sentiment_cache = market_part
+            self._sentiment_cache_time = now
+            print(f"   📈 市场情绪缓存已更新: 市场级加减 {market_part:+.1f} (TTL=30min)")
+
+        return news_part + self._sentiment_cache
 
     def get_vix_realtime(self):
         """获取实时VIX数据"""
@@ -692,7 +709,8 @@ class USScanner:
                             base_score -= 5
 
                         # 确保分数在合理范围
-                        final_score = max(0, min(100, base_score))
+                        # 2026-06-19 east 修复 Bug1: base 上限 90，预留给 LLM 10 分调整空间
+                        final_score = max(0, min(90, base_score))
 
                         if final_score >= 50:
                             index = ""
@@ -809,17 +827,84 @@ class USScanner:
 
         return top_results
 
+    def _flush_opportunities(self, analyzed, partial=True):
+        """增量保存 us-opportunities.json。任何时刻被调用都能安全落盘。
+
+        Args:
+            analyzed: 已完成（包含/不含LLM）的候选列表
+            partial: True=中间快照；False=本次扫描全部完成
+        """
+        # 过滤出最终评分 >=65 的、有效机会
+        valid = [c for c in analyzed if c.get('final_score', c.get('score', 0)) >= 65]
+        # 按 final_score 降序
+        valid.sort(key=lambda x: x.get('final_score', x.get('score', 0)), reverse=True)
+
+        data = {
+            'market': 'US',
+            'last_scan': datetime.now().isoformat(),
+            'data_source': getattr(self, 'data_source', 'unknown'),
+            'total_scanned': len(getattr(self, 'stocks', [])),
+            'analyzed_count': len(analyzed),
+            'partial': partial,
+            'stock_pool': {
+                'sp500': len(getattr(self, 'sp500', [])),
+                'nasdaq': len(getattr(self, 'nasdaq', [])),
+                'total': len(getattr(self, 'stocks', [])),
+            },
+            'opportunities': valid,
+        }
+
+        path = '/home/admin/.openclaw/workspace-stock/data/us-opportunities.json'
+        tmp_path = path + '.tmp'
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # 先写 tmp 再 rename，避免写到一半被kill后文件损坏
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)
+            tag = '快照' if partial else '完成'
+            print(f"   💾 增量保存({tag}): 已分析{len(analyzed)}只/有效{len(valid)}只")
+        except Exception as e:
+            print(f"   ⚠️ 增量保存失败: {e}")
+
     def save_results(self, results):
         """保存扫描结果(加入LLM分析)"""
 
         # 调用LLM分析
         llm_analyzed = []
 
+        # === 保命机制：被kill/Ctrl+C时 flush 已分析部分 ===
+        import signal as _signal
+
+        def _emergency_flush(signum, frame):
+            print(f"\n⚠️ 收到信号 {signum}，紧急 flush 已分析数据...")
+            try:
+                self._flush_opportunities(llm_analyzed, partial=True)
+            finally:
+                _signal.signal(signum, _signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+
+        for _sig in (_signal.SIGTERM, _signal.SIGINT):
+            try:
+                _signal.signal(_sig, _emergency_flush)
+            except Exception:
+                pass
+
         # 检查账户购买力,避免浪费token
         buying_power = self.get_buying_power()
         # 单票仓位约12%,最小买入金额约$5000
         min_position = 5000
         skip_llm = buying_power < min_position
+
+        # 🎯 四源补算覆盖候选池；LLM 仍只处理评分最高的前 10 只（剩下的直接用基础分，避免烧token）
+        TOP_LLM_N = 10
+        # results 已按 base_score 倒序，拍一下前几只的 symbol 作为名单
+        top_llm_set = {
+            (r.get('symbol') or '').replace('US.', '')
+            for r in results[:TOP_LLM_N]
+        }
+        if not skip_llm:
+            print(f"   🧠 LLM 仅处理评分 Top {TOP_LLM_N}: {sorted(s for s in top_llm_set if s)[:TOP_LLM_N]}")
 
         if skip_llm:
             print(f"   ⚠️ 账户购买力不足(${buying_power:,.0f} < ${min_position:,}),跳过LLM分析")
@@ -834,69 +919,119 @@ class USScanner:
         else:
             print(f"   📰 新闻情绪: 无数据")
 
-        for candidate in results:
-            # 注入新闻情绪到候选股票
-            symbol = candidate.get('symbol', '').replace('US.', '')
-            if symbol in news_sentiment:
-                candidate['sentiment'] = news_sentiment[symbol]
-                # 用新闻情绪重新调整基础评分
-                sentiment_val = news_sentiment[symbol]
-                base = candidate.get('base_score', candidate.get('score', 60))
-                if sentiment_val > 0.6:  # 正面新闻
-                    base = min(100, base + 15)
-                elif sentiment_val < 0.4:  # 负面新闻
-                    base = max(0, base - 10)
-                candidate['base_score'] = base
-                candidate['score'] = base
-            # 只分析基础评分>=70的候选
-            if candidate.get('score', 0) >= 70:
-                # 购买力不足时跳过LLM分析,直接用基础评分
-                if skip_llm:
-                    candidate['final_score'] = candidate.get('score', 70)
-                    candidate['llm_adjust'] = 0
-                    candidate['llm_reason'] = '购买力不足,跳过LLM分析'
-                else:
+        for idx, candidate in enumerate(results):
+            try:
+                # 注入新闻情绪到候选股票
+                symbol = candidate.get('symbol', '').replace('US.', '')
+                if symbol in news_sentiment:
+                    candidate['sentiment'] = news_sentiment[symbol]
+                    # 用新闻情绪重新调整基础评分
+                    sentiment_val = news_sentiment[symbol]
+                    base = candidate.get('base_score', candidate.get('score', 60))
+                    if sentiment_val > 0.6:  # 正面新闻
+                        # 2026-06-19 east 修复 Bug1: 正面新闻加分也不能越过 90，预留 LLM 调整空间
+                        base = min(90, base + 15)
+                    elif sentiment_val < 0.4:  # 负面新闻
+                        base = max(0, base - 10)
+                    candidate['base_score'] = base
+                    candidate['score'] = base
+                # 候选池内统一跑真实四源评分；LLM 仍只处理 Top10 名单
+                symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
+                if candidate.get('score', 0) >= 70:
+                    # 2026-06-24 east 改为：候选池统一跑真实四源评分（不是硬拆）
                     try:
                         sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
-                        from llm_stock_analyzer import analyze_stock
+                        from four_source_scorer import score_all as _fs_score_all
+                        fs = _fs_score_all(symbol_raw, 'us')
+                        # 将真实分项写回 candidate：供 auto-trader 通知直接使用，不再硬拆
+                        candidate['score_news'] = fs['score_news']
+                        candidate['score_announce'] = fs['score_announce']
+                        candidate['score_community'] = fs['score_community']
+                        candidate['score_institution'] = fs['score_institution']
+                        candidate['available_news'] = fs['available_news']
+                        candidate['available_announce'] = fs['available_announce']
+                        candidate['available_community'] = fs['available_community']
+                        candidate['available_institution'] = fs['available_institution']
+                        candidate['evidence_news'] = fs['evidence_news']
+                        candidate['evidence_announce'] = fs['evidence_announce']
+                        candidate['evidence_community'] = fs['evidence_community']
+                        candidate['evidence_institution'] = fs['evidence_institution']
+                        candidate['four_source_total'] = fs['score_total']
+                        candidate['four_source_available_count'] = fs['available_count']
+                        print(f"   📊 {symbol_raw} 四源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']} (总{fs['score_total']}, 覆盖{fs['available_count']}/4)")
 
-                        market_data = {
-                            'symbol': candidate.get('symbol', ''),
-                            'market': 'us',
-                            'base_score': candidate.get('score', 70),
-                            'price': candidate.get('price', 0),
-                            'change_pct': candidate.get('change_pct', 0),
-                            'rsi': candidate.get('rsi', 50),
-                            'ma20': candidate.get('ma20', 0),
-                            'ma50': candidate.get('ma50', 0),
-                            'volume_ratio': candidate.get('volume_ratio', 1.0),
-                            'atr': candidate.get('atr', 0),
-                            'sentiment': candidate.get('sentiment', '中性')
-                        }
-
-                        llm_result = analyze_stock(candidate.get('symbol'), market_data)
-
-                        candidate['final_score'] = llm_result.get('final_score', candidate.get('score'))
-                        candidate['llm_adjust'] = llm_result.get('score_adjust', 0)
-                        candidate['llm_reason'] = llm_result.get('llm_reason', '')
-
-                        print(f"   🧠 {candidate.get('symbol')}: 基础{candidate.get('score')} → LLM最终{candidate.get('final_score')}")
-
+                        # 2026-06-24 east 关键：让扫描器评分跟通知一致
+                        # 覆盖 >=3 个维度时：用真四源总分接管，卸掊 base_score
+                        # 覆盖 <3 时：降级，用 base_score × 0.8 避免数据不足的股被狂推
+                        if fs['available_count'] >= 3:
+                            candidate['base_score_legacy'] = candidate.get('score', 70)
+                            candidate['score'] = fs['score_total']
+                            candidate['scoring_mode'] = 'four_source_real'
+                            print(f"   ✅ {symbol_raw} 采用真四源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
+                        else:
+                            candidate['base_score_legacy'] = candidate.get('score', 70)
+                            candidate['score'] = int(candidate.get('score', 70) * 0.8)
+                            candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/4 <3)'
+                            print(f"   ⚠️ {symbol_raw} 覆盖不足，降级为 base_score×0.8 = {candidate['score']}")
                     except Exception as e:
-                        print(f"   ⚠️ LLM分析失败: {e}")
+                        print(f"   ⚠️ {symbol_raw} 四源评分失败: {e}")
+
+                    # 购买力不足时跳过LLM分析,直接用基础评分
+                    if skip_llm:
                         candidate['final_score'] = candidate.get('score', 70)
                         candidate['llm_adjust'] = 0
-                        candidate['llm_reason'] = 'LLM分析失败'
-                        candidate['llm_passed'] = False  # LLM未通过
-            else:
-                candidate['final_score'] = candidate.get('score', 70)
-                candidate['llm_adjust'] = 0
-                candidate['llm_reason'] = ''
-                candidate['llm_passed'] = True  # 未达到LLM分析阈值,默认通过
+                        candidate['llm_reason'] = '购买力不足,跳过LLM分析'
+                    else:
+                        try:
+                            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+                            from llm_stock_analyzer import analyze_stock
 
-            # 只保留最终评分>=65的
-            if candidate.get('final_score', 0) >= 65:
-                llm_analyzed.append(candidate)
+                            market_data = {
+                                'symbol': candidate.get('symbol', ''),
+                                'market': 'us',
+                                'base_score': candidate.get('score', 70),
+                                'price': candidate.get('price', 0),
+                                'change_pct': candidate.get('change_pct', 0),
+                                'rsi': candidate.get('rsi', 50),
+                                'ma20': candidate.get('ma20', 0),
+                                'ma50': candidate.get('ma50', 0),
+                                'volume_ratio': candidate.get('volume_ratio', 1.0),
+                                'atr': candidate.get('atr', 0),
+                                'sentiment': candidate.get('sentiment', '中性')
+                            }
+
+                            llm_result = analyze_stock(candidate.get('symbol'), market_data)
+
+                            candidate['final_score'] = llm_result.get('final_score', candidate.get('score'))
+                            candidate['llm_adjust'] = llm_result.get('score_adjust', 0)
+                            candidate['llm_reason'] = llm_result.get('llm_reason', '')
+
+                            print(f"   🧠 {candidate.get('symbol')}: 基础{candidate.get('score')} → LLM最终{candidate.get('final_score')}")
+
+                        except Exception as e:
+                            print(f"   ⚠️ LLM分析失败: {e}")
+                            candidate['final_score'] = candidate.get('score', 70)
+                            candidate['llm_adjust'] = 0
+                            candidate['llm_reason'] = 'LLM分析失败'
+                            candidate['llm_passed'] = False  # LLM未通过
+                else:
+                    candidate['final_score'] = candidate.get('score', 70)
+                    candidate['llm_adjust'] = 0
+                    if candidate.get('score', 0) < 70:
+                        candidate['llm_reason'] = ''
+                    else:
+                        candidate['llm_reason'] = f'评分未进入 Top{TOP_LLM_N}，跳过 LLM'
+                    candidate['llm_passed'] = True  # 未达到LLM分析阈值,默认通过
+
+                # 只保留最终评分>=65的
+                if candidate.get('final_score', 0) >= 65:
+                    llm_analyzed.append(candidate)
+            except Exception as e:
+                print(f"   ⚠️ 处理{candidate.get('symbol','UNK')}异常: {e}")
+
+            # === 增量保存：每 20 只 flush 一次，被kill也不会丢太多 ===
+            if (idx + 1) % 20 == 0:
+                self._flush_opportunities(llm_analyzed, partial=True)
 
         results = llm_analyzed
 
@@ -912,53 +1047,15 @@ class USScanner:
         # 美股交易时段：北京时间21:30-次日4:00，其余为非交易时段
         is_trading_hours = (current_time >= dt_time(21, 30)) or (current_time <= dt_time(4, 0))
         if not is_trading_hours:
-            # 筛选>=90分的信号推送
-            notify_opportunities = [c for c in results if c.get('final_score', 0) >= 90]
-            if notify_opportunities:
-                try:
-                    import importlib.util
-                    spec = importlib.util.spec_from_file_location("feishu_pusher", "/home/admin/.openclaw/workspace-stock/strategy/feishu-pusher.py")
-                    feishu_module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(feishu_module)
-                    pusher = feishu_module.FeishuPusher()
-                    for opp in notify_opportunities:
-                        symbol = opp.get('symbol', '')
-                        name = opp.get('name', symbol)
-                        score = opp.get('final_score', 0)
-                        change_pct = opp.get('change_pct', 0)
-                        price = opp.get('price', 0)
-                        reason = opp.get('llm_reason', '无具体原因')
-                        price_type = opp.get('price_type', '非盘中')
-                        
-                        content = f"🔔 【美股非交易时段高价值信号】\n\n标的: {symbol} {name}\n信号评分: {score}分\n当前{price_type}价格: ${price:.2f}\n涨跌幅: {change_pct:+.2f}%\n触发原因: {reason}\n操作建议: 明日开盘验证信号有效性后可考虑进场\n\n时间: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-                        pusher.send_message(content)
-                        print(f"✅ 非交易时段信号推送成功: {symbol}")
-                except Exception as e:
-                    print(f"⚠️ 非交易时段信号推送失败: {e}")
+            # 非交易时段信号推送已迁移到 auto-trader.py 的 send_opportunity_notification（带评分明细+确认提示），这里不再重复推送，避免双通知。
+            print("📭 非交易时段信号通知由 auto-trader 统一发送，scanner 跳过。")
 
         if high_score_opportunities:
             print(f"\n🚀 发现 {len(high_score_opportunities)} 个高分机会，尝试直接交易...")
             self.execute_trades_directly(high_score_opportunities)
 
-        data = {
-            'market': 'US',
-            'last_scan': datetime.now().isoformat(),
-            'data_source': self.data_source,
-            'total_scanned': len(self.stocks),
-            'stock_pool': {
-                'sp500': len(self.sp500),
-                'nasdaq': len(self.nasdaq),
-                'total': len(self.stocks)
-            },
-            'opportunities': results
-        }
-
-        opportunities_path = '/home/admin/.openclaw/workspace-stock/data/opportunities.json'
-        os.makedirs(os.path.dirname(opportunities_path), exist_ok=True)
-
-        with open(opportunities_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
+        # 最终保存（partial=False 表示本次扫描全部跑完）
+        self._flush_opportunities(llm_analyzed, partial=False)
         print(f"💾 结果已保存")
 
     def execute_trades_directly(self, opportunities):
@@ -1012,16 +1109,20 @@ class USScanner:
                     print(f"   ⏭️ {symbol}: 技术指标不满足")
                     continue
 
-                # 检查仓位限制
-                current_position_value = account.get('market_val', 0)
-                position_check, _ = trader.check_position_limits(account['total_assets'], current_position_value)
-                if not position_check.get('can_add_position', False):
-                    print(f"   ⏭️ {symbol}: 仓位已满")
-                    break
-
-                # 计算仓位
+                # 计算仓位 & 订单金额（必须先算出 order_value 才能 check_position_limits）
                 position_size = account['total_assets'] * trader.config.get('position_size', 0.12)
                 quantity = int(position_size / price) if price > 0 else 0
+                order_value = quantity * price
+
+                if quantity <= 0:
+                    print(f"   ⏭️ {symbol}: 计算出的股数为 0，跳过")
+                    continue
+
+                # 检查仓位限制（使用正确的 3 参调用：account, symbol, order_value）
+                position_check, position_reason = trader.check_position_limits(account, symbol, order_value, market='us')
+                if not position_check.get('can_add_position', False):
+                    print(f"   ⏭️ {symbol}: {position_reason or '仓位已满'}")
+                    break
 
                 if quantity > 0:
                     print(f"\n   🎯 准备买入 {symbol}")
@@ -1036,7 +1137,6 @@ class USScanner:
                         skip_llm=True,  # 跳过重复LLM分析
                         score=score,
                         reasons=entry_reasons,
-                        opportunity=opp
                     )
 
                     if success:
