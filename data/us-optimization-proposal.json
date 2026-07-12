@@ -1,21 +1,12 @@
 {
-  "timestamp": "2026-06-26T05:00:16.294011",
+  "timestamp": "2026-07-11T05:00:07.373271",
   "proposals": [
     {
-      "type": "llm_analysis",
-      "issue": "RSI参数未配置导致选股无信号",
-      "suggestion": "设置RSI(14)区间为30-70，启用超买超卖过滤机制",
-      "priority": "高",
       "id": "US001",
-      "category": "LLM深度分析"
-    },
-    {
-      "type": "llm_analysis",
-      "issue": "成交量阈值缺失导致缺乏资金面确认",
-      "suggestion": "添加成交量阈值（如≥20日均量1.5倍），过滤无量异动",
-      "priority": "高",
-      "id": "US002",
-      "category": "LLM深度分析"
+      "category": "例行检查",
+      "issue": "策略运行正常",
+      "suggestion": "继续监控，定期检查技术指标",
+      "priority": "低"
     }
   ]
 }

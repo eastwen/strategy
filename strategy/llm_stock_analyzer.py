@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 LLM股票分析模块
 - 被港股/美股扫描器调用，对候选股票进行LLM分析
@@ -8,19 +8,23 @@ LLM股票分析模块
 """
 
 import requests
+import os
 import json
 import re
 import sqlite3
 from datetime import datetime
 
+from runtime_config import NEWS_DB_PATH, load_api_keys
+
+_LLM_CONFIG = load_api_keys().get('llm', {})
+
 # 想加更多备用，直接往 LLM_FALLBACKS 里 append 就行。
-LLM_BASE_URL = "https://maas-api.cn-huabei-1.xf-yun.com/v2" #https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY  = "238e6a193f9882a03075385ac86676e2:YmRkN2E0YjQ1NGNjMDA0NzdlNjE3NmU0"  #sk-30c44cbba5eb43f2bf0a5c9a05d79d11
-LLM_MODEL    = "xopqwen36v35b"                # 主模型（2026-06-16: 原主模型 qwen3.6-plus-2026-04-02 免费额度耗尽，换到不带快照日期的稳定版）
+LLM_BASE_URL = os.getenv('LLM_BASE_URL') or _LLM_CONFIG.get('base_url') or 'https://maas-api.cn-huabei-1.xf-yun.com/v2'
+LLM_API_KEY = os.getenv('LLM_API_KEY') or _LLM_CONFIG.get('api_key', '')
+LLM_MODEL = os.getenv('LLM_MODEL') or _LLM_CONFIG.get('model') or 'xophunyuan7bmt'
 LLM_FALLBACKS = [                          # 备用模型（按顺序尝试，越靠前优先级越高）
-    "xopqwen35v35b",         # 原主模型，现作为备用 (额度恢复后也能用)
-    "xophunyuan7bmt",
-    "xop35qwen2b",
+    "xop35qwen2b",         # 原主模型，现作为备用 (额度恢复后也能用)
+    "xop3qwen1b7",
     "xop3qwen1b7",
     "qwen3.6-35b-a3b",
     "qwen3.5-plus-2026-04-20",
@@ -33,7 +37,6 @@ LLM_FALLBACKS = [                          # 备用模型（按顺序尝试，�
 LLM_FALLBACK = LLM_FALLBACKS[0] if LLM_FALLBACKS else None
 
 # 新闻库路径
-NEWS_DB_PATH = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
 
 
 def fetch_recent_news(symbol: str, hours: int = 24, limit: int = 8):
@@ -83,6 +86,96 @@ def format_news_block(news_items):
         ha = n.get('hours_ago', 0.0)
         ha_str = f'{ha:.0f}h前' if ha and ha >= 1 else '刚刚'
         lines.append(f"  {emoji} [{ha_str}] {n['title']}")
+    return '\n'.join(lines)
+
+
+# futu-stock-digest 预处理：调 futu /news_search API 拿新闻，做事件提炼+方向判断
+FUTU_NEWS_API = 'https://ai-news-search.futunn.com/news_search'
+_DIGEST_POS_KEYWORDS = ['涨', '增', '超预期', '利好', '突破', '获批', '回购', '加仓', '上调', '买入', '强劲', '增长', '盈利', '合作', '中标', '反弹', '牛市']
+_DIGEST_NEG_KEYWORDS = ['跌', '减', '亏损', '利空', '破位', '调查', '诉讼', '召回', '下调', '卖出', '警告', '下滑', '违约', '退市', '暴跌', '熊市', '制裁']
+
+
+def fetch_futu_digest(symbol: str, market: str = 'us', size: int = 10):
+    """调 futu /news_search API 拿新闻，做事件提炼+方向判断（futu-stock-digest 预处理）。
+
+    返回: {direction, conclusion, signals, evidence} 或 None（失败时）。
+    direction: 'bullish' / 'bearish' / 'neutral'
+    """
+    if not symbol:
+        return None
+    raw = symbol.split('.')[-1] if '.' in symbol else symbol
+    try:
+        r = requests.get(FUTU_NEWS_API, params={
+            'keyword': raw,
+            'size': size,
+            'news_type': 1,
+            'lang': 'zh-CN',
+            'sort_type': 2,
+        }, headers={'User-Agent': 'futu-stock-digest/0.0.2 (Skill)'}, timeout=8)
+        if r.status_code != 200:
+            return None
+        data = r.json() or {}
+        if str(data.get('code', -1)) != '0':
+            return None
+        items = data.get('data') or []
+        if not items:
+            return None
+
+        # 事件提炼：取标题，去重
+        titles = []
+        seen = set()
+        for item in items:
+            t = (item.get('title') or '').strip()
+            if t and t not in seen:
+                titles.append(t)
+                seen.add(t)
+        if not titles:
+            return None
+
+        # 方向判断：关键词投票
+        all_text = ' '.join(titles)
+        pos_hits = sum(1 for w in _DIGEST_POS_KEYWORDS if w in all_text)
+        neg_hits = sum(1 for w in _DIGEST_NEG_KEYWORDS if w in all_text)
+        if pos_hits > neg_hits and pos_hits > 0:
+            direction = 'bullish'
+        elif neg_hits > pos_hits and neg_hits > 0:
+            direction = 'bearish'
+        else:
+            direction = 'neutral'
+
+        # 信号列表：取前 4 条标题作为关键信号
+        signals = titles[:4]
+
+        # 证据：取前 3 条带 URL
+        evidence = []
+        for item in items[:3]:
+            t = (item.get('title') or '').strip()
+            u = (item.get('url') or '').strip()
+            if t:
+                evidence.append(f"{t}" + (f" ({u})" if u else ""))
+
+        conclusion = f"futu新闻摘要({len(titles)}条): 方向={direction}, 看多信号{pos_hits}个/看空信号{neg_hits}个"
+
+        return {
+            'direction': direction,
+            'conclusion': conclusion,
+            'signals': signals,
+            'evidence': evidence,
+        }
+    except Exception:
+        return None
+
+
+def format_digest_block(digest):
+    """把 futu-stock-digest 预处理结果格式化为 prompt 能读的文本块。"""
+    if not digest:
+        return '无futu新闻摘要'
+    lines = [f"方向: {digest['direction']}"]
+    lines.append(f"摘要: {digest['conclusion']}")
+    if digest.get('signals'):
+        lines.append("关键信号:")
+        for s in digest['signals']:
+            lines.append(f"  - {s}")
     return '\n'.join(lines)
 
 
@@ -558,6 +651,13 @@ class LLMStockAnalyzer:
                 - atr: ATR
                 - sentiment: 新闻情绪
                 - market: 市场类型 (us/hk)
+                - score_news, score_announce, score_community, score_institution, score_capital: 五源拆分（可选）
+                - evidence_announce, evidence_community, evidence_institution, evidence_capital: 非新闻维度真实证据（可选）
+                - capital_direction: 资金异动方向 '净流入'/'净流出'/'分歧'（可选）
+                - community_bull_pct, community_bear_pct, community_post_count: 社区多空百分比（可选）
+                - macd, macd_signal, macd_state, ma20_slope_pct: 趋势结构（可选）
+                - return_5d_pct, return_20d_pct, distance_20d_high_pct, intraday_drawdown_pct: 近期价格结构（可选）
+                - trailing_pe, forward_pe, pb_ratio, revenue_growth, earnings_growth, profit_margin: 轻量基本面（可选）
 
         Returns:
             dict: 包含 final_score, score_adjust, llm_reason
@@ -565,26 +665,109 @@ class LLMStockAnalyzer:
         if not self.client.api_key or self.client.api_key.startswith("sk-xxx"):
             return self._fallback(market_data, "无API Key")
 
-        # 拉取该股最近 24h 新闻（最多 8 条）一起丢给 LLM
-        recent_news = fetch_recent_news(symbol, hours=24, limit=8)
         market_data = dict(market_data)  # 避免修改调用方原始 dict
-        market_data['recent_news'] = recent_news
+
+        # 先用 futu-stock-digest 预处理：拿摘要+方向判断
+        market = market_data.get('market', 'us')
+        digest = fetch_futu_digest(symbol, market)
+        if digest:
+            market_data['futu_digest'] = digest
+        else:
+            # futu 没数据时，退回 news.db 原始新闻
+            market_data['recent_news'] = fetch_recent_news(symbol, hours=24, limit=8)
 
         prompt = self._build_prompt(symbol, market_data)
-        # 新闻带进来后token增加，max_tokens 抬到 800（推理模型 reasoning 占用大）
         content = self.client.call(prompt, max_tokens=800, temperature=0.3)
+        parsed = self._parse(content, market_data, fallback=False) if content else None
+        if parsed:
+            return parsed
 
-        if content:
-            return self._parse(content, market_data)
-        return self._fallback(market_data, "调用失败")
+        retry_prompt = prompt + '\n上次输出无法解析。只返回JSON对象；reason仍须包含催化、技术或资金确认及主要风险。'
+        retry_content = self.client.call(retry_prompt, max_tokens=400, temperature=0.0)
+        parsed = self._parse(retry_content, market_data, fallback=False) if retry_content else None
+        if parsed:
+            parsed['llm_retried'] = True
+            return parsed
+        return self._fallback(market_data, "LLM重试后仍无法解析，禁止交易")
 
     def _build_prompt(self, symbol, data):
         market = data.get('market', 'us')
         market_name = '美股' if market == 'us' else '港股'
 
-        recent_news = data.get('recent_news') or []
-        news_block = format_news_block(recent_news)
-        news_count = len(recent_news)
+        # 优先用 futu-stock-digest 预处理摘要，没有时退回原始新闻
+        digest = data.get('futu_digest')
+        if digest:
+            news_block = format_digest_block(digest)
+            news_count = len(digest.get('signals', []))
+            news_section_title = f"futu新闻摘要（方向: {digest.get('direction', 'N/A')}）"
+        else:
+            recent_news = data.get('recent_news') or []
+            news_block = format_news_block(recent_news)
+            news_count = len(recent_news)
+            news_section_title = f"最近24h相关新闻 ({news_count}条)"
+
+        # 五源拆分（老调用方不传也不报错）
+        sn = data.get('score_news', 0)
+        sa = data.get('score_announce', 0)
+        sc = data.get('score_community', 0)
+        si = data.get('score_institution', 0)
+        sk = data.get('score_capital', 0)
+        cap_dir = data.get('capital_direction', '')
+        bull_pct = data.get('community_bull_pct', 0)
+        bear_pct = data.get('community_bear_pct', 0)
+        post_count = data.get('community_post_count', 0)
+
+        def compact_evidence(value, limit=300):
+            text = ' '.join(str(value or '').split())
+            return text[:limit] if text else '未覆盖'
+
+        def format_metric(value, digits=2, suffix=''):
+            if value is None or value == '' or value == 'N/A':
+                return '未覆盖'
+            try:
+                number = float(value)
+                if number != number:
+                    return '未覆盖'
+                return f"{number:.{digits}f}{suffix}"
+            except (TypeError, ValueError):
+                return '未覆盖'
+
+        def format_bool(value):
+            if value is True:
+                return '是'
+            if value is False:
+                return '否'
+            return '未覆盖'
+
+        def format_large(value):
+            if value is None or value == '' or value == 'N/A':
+                return '未覆盖'
+            try:
+                number = float(value)
+                if number != number:
+                    return '未覆盖'
+                if abs(number) >= 1_000_000_000:
+                    return f"{number / 1_000_000_000:.2f}B"
+                if abs(number) >= 1_000_000:
+                    return f"{number / 1_000_000:.2f}M"
+                return f"{number:,.0f}"
+            except (TypeError, ValueError):
+                return '未覆盖'
+
+        evidence_announce = compact_evidence(data.get('evidence_announce'))
+        evidence_community = compact_evidence(data.get('evidence_community'))
+        evidence_institution = compact_evidence(data.get('evidence_institution'))
+        evidence_capital = compact_evidence(data.get('evidence_capital'))
+
+        five_source_line = (
+            f"基础评分: {data.get('base_score', 70)}分"
+            f"（五源拆分: 资讯{sn}/25 + 公告{sa}/20 + 社区{sc}/25 + 机构{si}/20 + 资金{sk}/10）"
+        )
+        cap_line = f"资金异动: {cap_dir or 'N/A'}"
+        if post_count and (bull_pct or bear_pct):
+            cap_line += (
+                f" | 社区多空: 看涨{bull_pct:.0%} / 看跌{bear_pct:.0%} ({post_count}条)"
+            )
 
         return f"""你是专业的{market_name}股票分析师。
 
@@ -596,13 +779,33 @@ RSI: {data.get('rsi', 'N/A')}
 MA20/MA50: {data.get('ma20', 'N/A')}/{data.get('ma50', 'N/A')}
 成交量比率: {data.get('volume_ratio', 'N/A')}x
 ATR: {data.get('atr', 'N/A')}
-基础评分: {data.get('base_score', 70)}分
+
+技术结构:
+- MACD: {data.get('macd_state') or '未覆盖'}（MACD {format_metric(data.get('macd'), 4)} / Signal {format_metric(data.get('macd_signal'), 4)}）
+- MA20近5日斜率: {format_metric(data.get('ma20_slope_pct'), 2, '%')} | 价格高于MA20: {format_bool(data.get('price_above_ma20'))} | 高于MA50: {format_bool(data.get('price_above_ma50'))}
+- 最近5日/20日涨跌: {format_metric(data.get('return_5d_pct'), 2, '%')} / {format_metric(data.get('return_20d_pct'), 2, '%')}
+- 距20日高点: {format_metric(data.get('distance_20d_high_pct'), 2, '%')} | 当日高点回撤: {format_metric(data.get('intraday_drawdown_pct'), 2, '%')}
+
+轻量基本面:
+- 行业: {data.get('sector') or '未覆盖'} | 市值: {format_large(data.get('market_cap'))}
+- PE(TTM/Forward): {format_metric(data.get('trailing_pe'))} / {format_metric(data.get('forward_pe'))} | PB: {format_metric(data.get('pb_ratio'))}
+- EPS: {format_metric(data.get('trailing_eps'))} | 营收增长: {format_metric(data.get('revenue_growth'), 2, '%')} | 盈利增长: {format_metric(data.get('earnings_growth'), 2, '%')}
+- 利润率: {format_metric(data.get('profit_margin'), 2, '%')} | 营收: {format_large(data.get('revenue'))} | 净利润: {format_large(data.get('net_profit'))}
+
+{five_source_line}
+{cap_line}
 新闻情绪均值: {data.get('sentiment', 'N/A')}
 
-最近24h相关新闻 ({news_count}条):
+非新闻维度真实证据:
+- 官方公告: {evidence_announce}
+- 社区情绪: {evidence_community}
+- 机构观点: {evidence_institution}
+- 资金异动: {evidence_capital}
+
+{news_section_title}:
 {news_block}
 
-请结合技术面 + 上述新闻事件综合判断，给出：
+请结合技术面 + 轻量基本面 + 五源评分 + 上述新闻事件综合判断；未覆盖字段必须忽略，不得补写或推测。给出：
 1. 评分调整（-10到+10），按以下场景对号入座：
 
    🔴 减分场景（-3 到 -8）：
@@ -610,6 +813,8 @@ ATR: {data.get('atr', 'N/A')}
    - 技术面无明显突破信号，横盘整理
    - 消息面利好已被市场充分定价
    - 成交量萎缩，动能减弱
+   - 资金净流出 + 社区看跌占比高（>50%）
+   - 当日涨幅明显且由单一消息事件驱动（如财报、并购、政策），需判断该利好是否已被市场充分定价、后续是否还有上涨空间；若判断利好已透支，给-3到-5分
    - 重大利空（诉讼/调查/召回/调低评级）请加大负分（-8 到 -10）
 
    🟢 加分场景（+3 到 +8）：
@@ -617,61 +822,75 @@ ATR: {data.get('atr', 'N/A')}
    - 机构集中上调目标价
    - 新业务/新订单/新政策直接受益
    - 技术突破配合成交量放大
+   - 资金净流入 + 社区看涨占比高（>60%）
    - 重大利好（超预期/回购/中标/获批）请加大正分（+8 到 +10）
 
    ⚪ 中性场景（0 到 ±2）：已涨过但仍在竞争市场、技术面中立、无明显驱动事件
 
-2. 一句话理由（必须提及关键事件或技术信号，且与打分方向一致）。
+2. 一句话验真理由（60-180字，且与打分方向一致）：
+   - 必须包含核心新闻催化或利空；
+   - 必须结合至少一项技术面或资金面证据确认或否定新闻影响；
+   - 必须指出一个基于输入数据的主要风险或不确定性；
+   - 只使用输入中明确提供的事实，不得编造公告、评级、资金或技术信号；
+   - 不要只复述新闻标题，不要使用“前景良好”“值得关注”等空泛结论。
 
-⚠️ 判分原则：如果理由中出现“无突破/无明显/横盘/已被透支/动能减弱/涨过”等关键词，必须给负分；不要出现“理由偏弱但调整为正分”的矛盾情况。
+⚠️ 判分原则：如果理由中出现”无突破/无明显/横盘/已被透支/动能减弱/涨过”等关键词，必须给负分；不要出现”理由偏弱但调整为正分”的矛盾情况。
 
-格式：调整,理由
-例如：+5,成交量放大且财报超预期
-或：-7,被SEC调查且评级被下调
-或：-4,涨过后技术面无突破且成交量萎缩
+格式：只返回一个JSON对象，不要Markdown代码块，不要额外文字。
+例如：{{"adjust":6,"reason":"Vera CPU与H200许可构成明确催化，成交量放大及资金净流入确认上涨动能，但利好可能已部分计价，需防范冲高回落"}}
+或：{{"adjust":-7,"reason":"SEC调查与评级下调形成明确利空，价格跌破MA20且资金持续流出确认弱势，短期仍有进一步下探风险"}}
+adjust必须是-10到+10之间的整数。
 
 直接回复："""
 
-    def _parse(self, content, data):
+    def _parse(self, content, data, fallback=True):
         base_score = data.get('base_score', 70)
-
+        text = (content or '').strip()
         try:
-            content = content.strip()
+            cleaned = text.strip(chr(96)).strip()
+            if cleaned.lower().startswith('json'):
+                cleaned = cleaned[4:].strip()
+            payload = None
+            try:
+                payload = json.loads(cleaned)
+            except Exception:
+                json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+                if json_match:
+                    payload = json.loads(json_match.group())
 
-            if ',' in content:
-                parts = content.split(',', 1)
-                adjust_str = parts[0].strip()
-                reason = parts[1].strip() if len(parts) > 1 else ''
+            if isinstance(payload, dict) and 'adjust' in payload:
+                adjust = int(round(float(payload.get('adjust', 0))))
+                reason = str(payload.get('reason', '') or '').strip()
             else:
-                adjust_str = content
-                reason = ''
+                normalized = cleaned.replace('，', ',')
+                parts = normalized.split(',', 1)
+                adjust_match = re.fullmatch(r'\s*([-+]?\d+)\s*', parts[0])
+                if not adjust_match:
+                    raise ValueError('missing adjustment')
+                adjust = int(adjust_match.group(1))
+                reason = parts[1].strip() if len(parts) > 1 else ''
 
-            match = re.search(r'[-+]?\d+', adjust_str)
-            if match:
-                adjust = int(match.group())
-                if abs(adjust) <= 10:
-                    final = max(0, min(100, base_score + adjust))
-                else:
-                    final = max(0, min(100, adjust))
-                    adjust = final - base_score
-
-                return {
-                    'symbol': data.get('symbol', 'UNKNOWN'),
-                    'base_score': base_score,
-                    'score_adjust': adjust,
-                    'llm_reason': reason[:100] if reason else 'LLM分析',
-                    'final_score': final,
-                    'timestamp': datetime.now().isoformat()
-                }
-        except:
-            pass
-
-        return self._fallback(data, f"解析失败:{content[:20]}")
+            if not -10 <= adjust <= 10:
+                raise ValueError('adjustment out of range')
+            final = max(0, min(100, base_score + adjust))
+            detailed_reason = reason[:180] if reason else 'LLM分析'
+            return {
+                'symbol': data.get('symbol', 'UNKNOWN'),
+                'base_score': base_score,
+                'score_adjust': adjust,
+                'llm_reason': f'{adjust:+d}分；{detailed_reason}',
+                'final_score': final,
+                'timestamp': datetime.now().isoformat(),
+                'passed': True,
+                'llm_status': 'parsed',
+            }
+        except Exception:
+            if not fallback:
+                return None
+            return self._fallback(data, f"解析失败:{text[:20]}")
 
     def _fallback(self, data, reason):
         base = data.get('base_score', 70)
-        passed = not any(x in reason for x in ['无API Key', 'API错误', '调用失败'])
-
         return {
             'symbol': data.get('symbol', 'UNKNOWN'),
             'base_score': base,
@@ -679,7 +898,8 @@ ATR: {data.get('atr', 'N/A')}
             'llm_reason': reason,
             'final_score': base,
             'timestamp': datetime.now().isoformat(),
-            'passed': passed
+            'passed': False,
+            'llm_status': 'failed',
         }
 
 

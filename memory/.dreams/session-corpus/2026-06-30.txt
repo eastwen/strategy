@@ -1,0 +1,3 @@
+[stock/sessions/stock/761dcb3b-33c4-4099-8110-a1a383a190cd.jsonl#L5] User: 今天市场那么好，没有合格的股票吗？
+[stock/sessions/stock/761dcb3b-33c4-4099-8110-a1a383a190cd.jsonl#L14] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/761dcb3b-33c4-4099-8110-a1a383a190cd.jsonl#L21] Assistant: [assistant turn failed before producing content]

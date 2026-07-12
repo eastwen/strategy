@@ -1,11 +1,11 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 港股扫描器 v2.0
 扫描恒生指数(90只) + 恒生科技指数(30只) = 101只
 数据源：Futu OpenD（主） / Tushare（备）
-扫描时间：开盘前10分钟、交易时段（午休不扫描）
+扫描时间：08:50预扫描、交易时段（午休不扫描）
 
-四源共振系统：
+五源共振系统：
 - 国际资讯 (30%): Bloomberg, Reuters, 雅虎财经
 - 港股公告 (20%): 财报、回购、配股
 - 国内社区 (25%): 雪球、富途讨论
@@ -18,7 +18,15 @@ import time
 import requests
 from datetime import datetime, date, time as dt_time
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import (
+    DATA_DIR,
+    FUTU_HOST,
+    FUTU_PORT,
+    NEWS_DB_PATH,
+    STRATEGY_DIR,
+    config_path,
+    load_api_keys,
+)
 
 # 导入Futu API
 from futu import OpenQuoteContext, RET_OK
@@ -37,17 +45,16 @@ class HKScanner:
     
     def load_api_keys(self):
         """加载API密钥"""
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            self.keys = json.load(f)
+        self.keys = load_api_keys()
         
-        self.futu_host = '127.0.0.1'
-        self.futu_port = 11111
+        self.futu_host = FUTU_HOST
+        self.futu_port = FUTU_PORT
         self.tushare_token = self.keys.get('tushare', {}).get('token', '')
     
     def get_buying_power(self):
         """获取账户可用购买力"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/trades.json', 'r') as f:
+            with (DATA_DIR / 'trades.json').open('r', encoding='utf-8') as f:
                 data = json.load(f)
             for acc in data.get('accounts', []):
                 if acc.get('acc_type') == 'MARGIN':
@@ -61,7 +68,7 @@ class HKScanner:
     def load_stock_pool(self):
         """加载港股成分股（恒生指数 + 恒生科技），去重"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/strategy/hk-index-constituents.json', 'r') as f:
+            with (STRATEGY_DIR / 'hk-index-constituents.json').open('r', encoding='utf-8') as f:
                 data = json.load(f)
             
             self.hsi = data.get('hsi', [])
@@ -85,7 +92,7 @@ class HKScanner:
     
     def load_config(self):
         """加载策略配置"""
-        with open('/home/admin/.openclaw/workspace-stock/config/hk-strategy.json', 'r') as f:
+        with config_path('hk-strategy.json').open('r', encoding='utf-8') as f:
             self.config = json.load(f)
     
     def get_market_sentiment(self):
@@ -98,11 +105,10 @@ class HKScanner:
             return None
     
     def get_news_sentiment(self, hours=24):
-        """获取市场整体新闻情绪（四源共振-国际资讯30%）"""
+        """获取市场整体新闻情绪（五源共振-国际资讯25%）"""
         try:
             import sqlite3
-            db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(NEWS_DB_PATH)
             cursor = conn.cursor()
             
             query = '''
@@ -143,7 +149,7 @@ class HKScanner:
         
         # 扫描时段
         scan_times = {
-            'pre_market': [(9, 20), (9, 30)],
+            'pre_market': [(8, 50), (9, 30)],
             'morning': [(9, 30), (12, 0)],
             'afternoon': [(13, 0), (16, 10)],
         }
@@ -197,7 +203,7 @@ class HKScanner:
             elif rsi <= 35:  # 超卖
                 score += 10
         
-        # 2. 新闻情绪加成（四源共振-国际资讯30%）
+        # 2. 新闻情绪加成（五源共振-国际资讯25%）
         if news_sentiment:
             if news_sentiment > 0.6:  # 正面新闻
                 score += 15
@@ -321,7 +327,7 @@ class HKScanner:
             ctx = OpenQuoteContext(self.futu_host, self.futu_port)
             
             # 获取60天K线
-            ret, klines, extra = ctx.request_history_kline(symbol, start='2026-01-01', end='2026-03-31', max_count=60)
+            ret, klines, extra = ctx.request_history_kline(symbol, start='', end='', max_count=60)
             
             if ret != RET_OK or klines is None or klines.empty:
                 ctx.close()
@@ -367,7 +373,7 @@ class HKScanner:
                     print(f"    技术指标进度: {i+1}/{len(symbols)}")
                 
                 try:
-                    ret, klines, extra = ctx.request_history_kline(symbol, start='2026-01-01', end='2026-03-31', max_count=60)
+                    ret, klines, extra = ctx.request_history_kline(symbol, start='', end='', max_count=60)
                     
                     if ret == RET_OK and klines is not None and not klines.empty:
                         df = pd.DataFrame(klines)
@@ -411,7 +417,7 @@ class HKScanner:
         quote_ctx = OpenQuoteContext(self.futu_host, self.futu_port)
         
         try:
-            # 获取新闻情绪（四源共振-国际资讯30%）
+            # 获取新闻情绪（五源共振-国际资讯25%）
             self.news_sentiment = self.get_news_sentiment(hours=24)
             
             total = len(self.stocks)
@@ -460,13 +466,13 @@ class HKScanner:
                             # 实际应用中应该从历史数据获取
                         }
                         
-                        # 添加技术指标（示例数据，实际应该从API获取）
-                        # 这里只是演示，实际需要更准确的数据
-                        stock_data['ma20'] = price_float * 0.98  # 示例
-                        stock_data['ma20_slope'] = 0.1  # 示例：轻微上升
-                        stock_data['rsi'] = 50  # 示例：中性
-                        stock_data['break_high'] = price_float > prev_close_float * 1.02  # 突破2%
-                        stock_data['bollinger_squeeze'] = True  # 示例
+                        # 添加技术指标（临时占位值，后续会被 batch_get_real_technicals() 覆盖）
+                        # ⚠️ 这些值仅用于初始筛选，真实技术指标由独立函数批量获取
+                        stock_data['ma20'] = price_float * 0.98      # PLACEHOLDER
+                        stock_data['ma20_slope'] = 0.1               # PLACEHOLDER
+                        stock_data['rsi'] = 50                       # PLACEHOLDER
+                        stock_data['break_high'] = price_float > prev_close_float * 1.02  # 简化判断
+                        stock_data['bollinger_squeeze'] = True       # PLACEHOLDER
                         
                         score = self.calculate_score(stock_data, price_float, prev_close_float, volume_float, news_sentiment=self.news_sentiment)
                         
@@ -487,6 +493,15 @@ class HKScanner:
                                 'base_score': score,
                                 'index': index,
                                 'sector': index,
+                                'market_cap': row.get('market_val'),
+                                'trailing_pe': row.get('pe_ttm_ratio'),
+                                'pb_ratio': row.get('pb_ratio'),
+                                'trailing_eps': row.get('earning_per_share'),
+                                'earnings_growth': row.get('net_profit_growth'),
+                                'revenue_growth': row.get('sum_of_business_growth'),
+                                'net_profit': row.get('net_profit'),
+                                'revenue': row.get('sum_of_business'),
+                                'volume_ratio': row.get('volume_ratio'),
                                 'timestamp': datetime.now().isoformat()
                             })
                 except:
@@ -642,15 +657,21 @@ class HKScanner:
         if symbols:
             print(f"   📊 批量获取 {len(symbols)} 只股票的技术指标...")
             try:
-                techs = self.batch_get_real_technicals(symbols)
+                from technical_indicators_hk import HKTechIndicators
+                tech_analyzer = HKTechIndicators()
+                try:
+                    techs = {sym: tech_analyzer.get_llm_snapshot(sym) for sym in symbols}
+                finally:
+                    tech_analyzer.close()
                 for candidate in results:
                     sym = candidate.get('symbol', '')
-                    if sym in techs:
-                        candidate['rsi'] = techs[sym].get('rsi', 50)
-                        candidate['ma20'] = techs[sym].get('ma20', 0)
-                        candidate['ma50'] = techs[sym].get('ma50', 0)
+                    tech_data = techs.get(sym) or {}
+                    if tech_data:
+                        candidate.update(tech_data)
+                        if not candidate.get('volume_ratio'):
+                            candidate['volume_ratio'] = tech_data.get('kline_volume_ratio')
                         real_tech_count += 1
-                        print(f"   📊 {sym}: RSI={candidate['rsi']:.1f}")
+                        print(f"   📊 {sym}: RSI={candidate['rsi']:.1f}, MACD={candidate.get('macd_state', 'N/A')}")
             except Exception as e:
                 print(f"   ⚠️ 批量获取失败: {e}")
         
@@ -669,7 +690,7 @@ class HKScanner:
         else:
             print(f"   💰 账户购买力: ${buying_power:,.0f}")
         
-        # 🎯 四源补算覆盖候选池；LLM 仍只处理评分最高的前 10 只（剩下的直接用基础分，避免烧token）
+        # 🎯 五源补算覆盖候选池；LLM 仍只处理评分最高的前 10 只（剩下的直接用基础分，避免烧token）
         TOP_LLM_N = 10
         # results 已按 base_score 倒序，拍一下前几只的 symbol 作为名单
         top_llm_set = {(r.get('symbol') or '') for r in results[:TOP_LLM_N]}
@@ -677,45 +698,78 @@ class HKScanner:
             print(f"   🧠 LLM 仅处理评分 Top {TOP_LLM_N}")
         
         for candidate in results:
-            # 候选池内统一跑真实四源评分；LLM 仍只处理 Top10 名单
+            # 候选池内统一跑真实五源评分；LLM 仍只处理 Top10 名单
             if candidate.get('base_score', 0) >= 70:
-                # 2026-06-24 east 新增：给 Top N 跑真实四源评分（不是硬拆）
-                sym_clean = (candidate.get('symbol') or '').replace('HK.', '').lstrip('0') or '0'
+                # 2026-06-24 east 新增：给候选池跑真实五源评分（不是硬拆）
+                sym_clean = (candidate.get('symbol') or '').replace('HK.', '')
                 try:
-                    sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+                    sys.path.insert(0, str(STRATEGY_DIR))
                     from four_source_scorer import score_all as _fs_score_all
                     fs = _fs_score_all(sym_clean, 'hk')
                     candidate['score_news'] = fs['score_news']
                     candidate['score_announce'] = fs['score_announce']
                     candidate['score_community'] = fs['score_community']
                     candidate['score_institution'] = fs['score_institution']
+                    candidate['score_capital'] = fs['score_capital']
                     candidate['available_news'] = fs['available_news']
                     candidate['available_announce'] = fs['available_announce']
                     candidate['available_community'] = fs['available_community']
                     candidate['available_institution'] = fs['available_institution']
+                    candidate['available_capital'] = fs['available_capital']
                     candidate['evidence_news'] = fs['evidence_news']
                     candidate['evidence_announce'] = fs['evidence_announce']
                     candidate['evidence_community'] = fs['evidence_community']
                     candidate['evidence_institution'] = fs['evidence_institution']
-                    candidate['four_source_total'] = fs['score_total']
-                    candidate['four_source_available_count'] = fs['available_count']
-                    print(f"   📊 {candidate.get('symbol')} 四源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']} (总{fs['score_total']}, 覆盖{fs['available_count']}/4)")
+                    candidate['evidence_capital'] = fs['evidence_capital']
+                    candidate['five_source_total'] = fs['score_total']
+                    candidate['four_source_total'] = fs['score_total']  # 兼容旧字段
+                    candidate['five_source_available_count'] = fs['available_count']
+                    candidate['four_source_available_count'] = fs['available_count']  # 兼容旧字段
+
+                    # 第一层社区情绪：单独调 futu-comment-sentiment 拿原始百分比写回 candidate
+                    try:
+                        from four_source_scorer import _community_futu_comment as _futu_com
+                        hk_sym_raw = (candidate.get('symbol') or '').replace('HK.', '')
+                        futu_com = _futu_com(hk_sym_raw or sym_clean, 25)
+                        if futu_com.get('available'):
+                            raw = futu_com.get('raw', {})
+                            candidate['community_bull_pct'] = raw.get('bull_pct', 0)
+                            candidate['community_bear_pct'] = raw.get('bear_pct', 0)
+                            candidate['community_neutral_pct'] = 1 - raw.get('bull_pct', 0) - raw.get('bear_pct', 0)
+                            candidate['community_post_count'] = raw.get('count', 0)
+                            candidate['community_futu_score'] = futu_com.get('score', 0)
+                    except Exception as _e:
+                        pass  # 社区百分比是辅助字段，失败不影响主流程
+
+                    # 第一层资金异动：从 score_all 返回的 raw 读原始数据写回 candidate
+                    try:
+                        cap_raw = fs.get('raw', {}).get('capital', {})
+                        if cap_raw:
+                            candidate['capital_direction'] = cap_raw.get('direction', '')
+                            candidate['capital_pos_hits'] = cap_raw.get('pos_hits', 0)
+                            candidate['capital_neg_hits'] = cap_raw.get('neg_hits', 0)
+                            candidate['capital_content'] = cap_raw.get('content', '')
+                            candidate['capital_futu_score'] = fs.get('score_capital', 0)
+                    except Exception as _e:
+                        pass  # 资金异动原始字段是辅助字段，失败不影响主流程
+
+                    print(f"   📊 {candidate.get('symbol')} 五源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']}/资金{fs['score_capital']} (总{fs['score_total']}, 覆盖{fs['available_count']}/5)")
 
                     # 2026-06-24 east 关键：让扫描器评分跟通知一致
                     if fs['available_count'] >= 3:
                         candidate['base_score_legacy'] = candidate.get('base_score', 70)
                         candidate['base_score'] = fs['score_total']
                         candidate['score'] = fs['score_total']
-                        candidate['scoring_mode'] = 'four_source_real'
-                        print(f"   ✅ {candidate.get('symbol')} 采用真四源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
+                        candidate['scoring_mode'] = 'five_source_real'
+                        print(f"   ✅ {candidate.get('symbol')} 采用真五源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
                     else:
                         candidate['base_score_legacy'] = candidate.get('base_score', 70)
                         candidate['base_score'] = int(candidate.get('base_score', 70) * 0.8)
                         candidate['score'] = candidate['base_score']
-                        candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/4 <3)'
+                        candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/5 <3)'
                         print(f"   ⚠️ {candidate.get('symbol')} 覆盖不足，降级为 base_score×0.8 = {candidate['base_score']}")
                 except Exception as e:
-                    print(f"   ⚠️ {candidate.get('symbol')} 四源评分失败: {e}")
+                    print(f"   ⚠️ {candidate.get('symbol')} 五源评分失败: {e}")
 
                 # 购买力不足时跳过LLM分析，直接用基础评分
                 if skip_llm:
@@ -724,7 +778,7 @@ class HKScanner:
                     candidate['llm_reason'] = '购买力不足，跳过LLM分析'
                 else:
                     try:
-                        sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+                        sys.path.insert(0, str(STRATEGY_DIR))
                         from llm_stock_analyzer import analyze_stock
                         
                         market_data = {
@@ -736,9 +790,41 @@ class HKScanner:
                             'rsi': candidate.get('rsi', 50),
                             'ma20': candidate.get('ma20', 0),
                             'ma50': candidate.get('ma50', 0),
-                            'volume_ratio': candidate.get('volume_ratio', 1.0),
+                            'volume_ratio': candidate.get('volume_ratio') or candidate.get('kline_volume_ratio'),
                             'atr': candidate.get('atr', 0),
-                            'sentiment': candidate.get('sentiment', '中性')
+                            'macd': candidate.get('macd'),
+                            'macd_signal': candidate.get('macd_signal'),
+                            'macd_state': candidate.get('macd_state', ''),
+                            'ma20_slope_pct': candidate.get('ma20_slope_pct'),
+                            'return_5d_pct': candidate.get('return_5d_pct'),
+                            'return_20d_pct': candidate.get('return_20d_pct'),
+                            'distance_20d_high_pct': candidate.get('distance_20d_high_pct'),
+                            'intraday_drawdown_pct': candidate.get('intraday_drawdown_pct'),
+                            'price_above_ma20': candidate.get('price_above_ma20'),
+                            'price_above_ma50': candidate.get('price_above_ma50'),
+                            'market_cap': candidate.get('market_cap'),
+                            'trailing_pe': candidate.get('trailing_pe'),
+                            'pb_ratio': candidate.get('pb_ratio'),
+                            'revenue_growth': candidate.get('revenue_growth'),
+                            'earnings_growth': candidate.get('earnings_growth'),
+                            'net_profit': candidate.get('net_profit'),
+                            'revenue': candidate.get('revenue'),
+                            'trailing_eps': candidate.get('trailing_eps'),
+                            'sector': candidate.get('sector', ''),
+                            'sentiment': candidate.get('sentiment', '中性'),
+                            'score_news': candidate.get('score_news', 0),
+                            'score_announce': candidate.get('score_announce', 0),
+                            'score_community': candidate.get('score_community', 0),
+                            'score_institution': candidate.get('score_institution', 0),
+                            'score_capital': candidate.get('score_capital', 0),
+                            'evidence_announce': candidate.get('evidence_announce', ''),
+                            'evidence_community': candidate.get('evidence_community', ''),
+                            'evidence_institution': candidate.get('evidence_institution', ''),
+                            'evidence_capital': candidate.get('evidence_capital', ''),
+                            'capital_direction': candidate.get('capital_direction', ''),
+                            'community_bull_pct': candidate.get('community_bull_pct', 0),
+                            'community_bear_pct': candidate.get('community_bear_pct', 0),
+                            'community_post_count': candidate.get('community_post_count', 0),
                         }
                         
                         llm_result = analyze_stock(candidate.get('symbol'), market_data)
@@ -746,6 +832,8 @@ class HKScanner:
                         candidate['final_score'] = llm_result.get('final_score', candidate.get('base_score'))
                         candidate['llm_adjust'] = llm_result.get('score_adjust', 0)
                         candidate['llm_reason'] = llm_result.get('llm_reason', '')
+                        candidate['llm_passed'] = bool(llm_result.get('passed', True))
+                        candidate['llm_status'] = llm_result.get('llm_status', 'parsed')
                         
                         print(f"   🧠 {candidate.get('symbol')}: 基础{candidate.get('base_score')} → LLM最终{candidate.get('final_score')}")
                         
@@ -753,8 +841,9 @@ class HKScanner:
                         print(f"   ⚠️ LLM分析失败: {e}")
                         candidate['final_score'] = candidate.get('base_score', 70)
                         candidate['llm_adjust'] = 0
-                        candidate['llm_reason'] = 'LLM分析失败'
-                        candidate['llm_passed'] = False  # LLM未通过
+                        candidate['llm_reason'] = f'LLM分析失败，禁止交易: {e}'
+                        candidate['llm_passed'] = False
+                        candidate['llm_status'] = 'failed'
             else:
                 candidate['final_score'] = candidate.get('base_score', 70)
                 candidate['llm_adjust'] = 0
@@ -771,9 +860,10 @@ class HKScanner:
         results = llm_analyzed
         
         # ===== LLM分析完成后，直接触发交易 =====
+        auto_trade_min_score = 75
         high_score_opportunities = [
-            c for c in results 
-            if c.get('llm_passed', True) and c.get('final_score', 0) >= 70  # 港股阈值70分
+            c for c in results
+            if c.get('llm_passed', True) and c.get('final_score', 0) >= auto_trade_min_score
         ]
         
         if high_score_opportunities:
@@ -793,7 +883,7 @@ class HKScanner:
             'opportunities': results
         }
         
-        with open('/home/admin/.openclaw/workspace-stock/data/hk-opportunities.json', 'w', encoding='utf-8') as f:
+        with (DATA_DIR / 'hk-opportunities.json').open('w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
         print(f"💾 结果已保存")
@@ -803,7 +893,7 @@ class HKScanner:
         try:
             # 导入自动交易模块（文件名是auto-trader.py）
             import importlib.util
-            spec = importlib.util.spec_from_file_location("auto_trader", "/home/admin/.openclaw/workspace-stock/strategy/auto-trader.py")
+            spec = importlib.util.spec_from_file_location("auto_trader", STRATEGY_DIR / "auto-trader.py")
             auto_trader_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(auto_trader_module)
             AutoTrader = auto_trader_module.AutoTrader
@@ -847,36 +937,29 @@ class HKScanner:
                     print(f"   ⏭️ {symbol}: 技术指标不满足")
                     continue
                 
-                # 计算仓位 (港股3%)
-                position_size = account['total_assets'] * trader.hk_config.get('position_size', 0.03)
-                raw_quantity = int(position_size / price) if price > 0 else 0
                 lot_size = trader._get_hk_lot_size(symbol)
-                quantity = (raw_quantity // lot_size) * lot_size  # 整手交易
-                order_value = quantity * price
-
-                if quantity <= 0:
-                    print(f"   ⏭️ {symbol}: 计算后股数为 0，跳过")
+                order_plan = trader.prepare_buy_order(account, symbol, price, score, market='hk', lot_size=lot_size)
+                if not order_plan.get('can_buy'):
+                    print(f"   ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                     continue
 
-                # 仓位风控：单票/总仓位上限（与美股扫描器对齐）
-                position_check, position_reason = trader.check_position_limits(account, symbol, order_value, market='hk')
-                if not position_check.get('can_add_position', False):
-                    print(f"   ⏭️ {symbol}: {position_reason or '仓位已满'}")
-                    break
+                quantity = order_plan['quantity']
 
                 if quantity > 0:
                     print(f"\n   🎯 准备买入 {symbol}")
                     print(f"      价格: ${price:.2f}")
                     print(f"      数量: {quantity}股 (每手{lot_size})")
                     print(f"      评分: {score}分")
+                    print(f"      评分仓位: {order_plan['base_pct']*100:.1f}%")
                     
                     # 执行交易 (不再重复LLM分析)
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
                     success = trader.execute_trade(
                         symbol, 'BUY', quantity, price, 'hk', 
                         skip_llm=True,  # 跳过重复LLM分析
-                        score=score, 
-                        reasons=entry_reasons
+                        score=score,
+                        reasons=entry_reasons,
+                        opp=opp
                     )
                     
                     if success:

@@ -2,6 +2,8 @@
 """VIX恐慌指数获取模块"""
 import requests
 import json
+
+from runtime_config import load_api_keys
 import yfinance as yf
 
 def get_vix_index():
@@ -17,7 +19,7 @@ def get_vix_index():
     
     try:
         # 使用AlphaVantage获取
-        API_KEYS = json.load(open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json'))
+        API_KEYS = load_api_keys()
         ALPHA_KEY = API_KEYS['alphavantage']['api_key']
         
         url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=VIX&apikey={ALPHA_KEY}"

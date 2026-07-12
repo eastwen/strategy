@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 港股市场情绪监控模块
 获取VHSI、港股通资金流向、牛熊证比例
@@ -9,7 +9,7 @@ import json
 import time
 from datetime import datetime
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import FUTU_HOST, FUTU_PORT, PYTHON_BIN, SKILLS_DIR
 from futu import OpenQuoteContext, RET_OK
 
 class HKMarketSentiment:
@@ -24,7 +24,7 @@ class HKMarketSentiment:
     def connect(self):
         """连接Futu OpenD"""
         try:
-            self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            self.quote_ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
             return True
         except Exception as e:
             print(f"连接Futu失败: {e}")
@@ -173,12 +173,57 @@ class HKMarketSentiment:
         except Exception as e:
             print(f"获取牛熊证失败: {e}")
         return None
-    
+
+    def _check_derivatives_fallback(self):
+        """衍生品异动作为牛熊证的备用源（futu-derivatives-anomaly skill）。
+
+        调 futu-derivatives-anomaly 脚本拿恒指衍生品异动文本，
+        按关键词判断看多/看空，返回情绪评分。
+        """
+        import subprocess, json as _json
+        FUTU_DERIV_SCRIPT = str(SKILLS_DIR / 'futu-derivatives-anomaly/scripts/handle_derivatives_anomaly.py')
+        FUTU_PY = str(PYTHON_BIN)
+        _POS = ['看涨期权大单', '做多', '牛证', '看多情绪', '反弹机会', '看涨']
+        _NEG = ['看跌期权大单', '看空情绪', '熊证', '看跌期权活跃度', '阻力位', '看跌']
+        try:
+            proc = subprocess.run(
+                [FUTU_PY, FUTU_DERIV_SCRIPT, 'HK.800000', '--time-range', '7', '--json'],
+                capture_output=True, text=True, timeout=20,
+            )
+            if proc.returncode != 0:
+                return None
+            stdout = proc.stdout.strip()
+            json_start = stdout.find('{')
+            if json_start < 0:
+                return None
+            payload, _end = _json.JSONDecoder().raw_decode(stdout[json_start:])
+            data = payload.get('data') or {}
+            if str(data.get('err_code', -1)) != '0':
+                return None
+            content = data.get('content') or ''
+            if not content:
+                return None
+            low = content.lower()
+            pos_hits = sum(1 for w in _POS if w in low)
+            neg_hits = sum(1 for w in _NEG if w in low)
+            if neg_hits > pos_hits:
+                print(f"   📉 衍生品异动备用源(牛熊证替代): 看空 (正{pos_hits}/负{neg_hits})")
+                return {'sentiment': '看空', 'score': 20, 'note': f'衍生品看空(正{pos_hits}/负{neg_hits})'}
+            elif pos_hits > neg_hits:
+                print(f"   📈 衍生品异动备用源(牛熊证替代): 看多 (正{pos_hits}/负{neg_hits})")
+                return {'sentiment': '看多', 'score': 75, 'note': f'衍生品看多(正{pos_hits}/负{neg_hits})'}
+            else:
+                return {'sentiment': '中性', 'score': 50, 'note': f'衍生品中性(正{pos_hits}/负{neg_hits})'}
+        except Exception as e:
+            print(f"衍生品异动备用源失败: {e}")
+            return None
+
     def get_market_sentiment(self):
         """获取完整市场情绪"""
         if not self.connect():
+            print(f"⚠️ 港股情绪获取失败: 无法连接 Futu OpenD（host={FUTU_HOST}:{FUTU_PORT}），请确认 OpenD 已启动")
             return None
-        
+
         sentiment = {
             'vhsi': None,
             'capital_flow': None,
@@ -246,6 +291,13 @@ class HKMarketSentiment:
             else:
                 sentiment['warrant_sentiment'] = '看空'
                 sentiment['warrant_score'] = 20
+        else:
+            # 牛熊证取数失败，用衍生品异动作为备用源
+            deriv = self._check_derivatives_fallback()
+            if deriv is not None:
+                sentiment['warrant_sentiment'] = deriv['sentiment']
+                sentiment['warrant_score'] = deriv['score']
+                sentiment['warrant_detail'] = {'source': 'futu-derivatives-anomaly', 'note': deriv['note']}
         
         # 计算综合情绪评分
         scores = []

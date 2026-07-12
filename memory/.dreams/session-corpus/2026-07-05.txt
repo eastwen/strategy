@@ -1,0 +1,8 @@
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L3] Assistant: ⚠️ Agent failed before reply: No API key found for provider "qwen". Auth store: /home/admin/.openclaw/agents/Stock/agent/openclaw-agent.sqlite (agentDir: /home/admin/.openclaw/agents/Stock/agent). Configure auth for this agent (openclaw agents add <id>) or copy on
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L5] Assistant: ⚠️ Agent failed before reply: No API key found for provider "qwen". Auth store: /home/admin/.openclaw/agents/Stock/agent/openclaw-agent.sqlite (agentDir: /home/admin/.openclaw/agents/Stock/agent). Configure auth for this agent (openclaw agents add <id>) or copy on
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L9] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L11] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L13] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L16] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L17] User: 你现在用什么模型？
+[stock/sessions/stock/76c5a891-034e-4dd8-87b5-2edafda4cb00.jsonl#L18] Assistant: [assistant turn failed before producing content]

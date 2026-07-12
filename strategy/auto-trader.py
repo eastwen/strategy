@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3
+#!/usr/bin/env python3
 """
 自动交易执行器 v2.1
 集成技术指标检查
@@ -17,12 +17,18 @@ import time
 import requests
 from datetime import datetime, time as dt_time, timedelta
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import (
+    DATA_DIR,
+    FUTU_HOST,
+    FUTU_PORT,
+    STRATEGY_DIR,
+    load_api_keys,
+)
 
-from futu import OpenQuoteContext, OpenSecTradeContext, RET_OK, OrderType, TrdSide, TrdEnv, Market, SecurityType, TrdMarket, SecurityFirm
+from futu import OpenQuoteContext, OpenSecTradeContext, RET_OK, OrderType, TrdSide, TrdEnv, Market, SecurityType, TrdMarket, SecurityFirm, ModifyOrderOp, OrderStatus
 
 # 导入技术指标模块（区分美股/港股）
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+sys.path.insert(0, str(STRATEGY_DIR))
 try:
     from technical_indicators_us import USTechIndicators
     from technical_indicators_hk import HKTechIndicators
@@ -30,6 +36,13 @@ try:
 except Exception as e:
     TECH_INDICATORS_AVAILABLE = False
     print(f"⚠️ 技术指标模块不可用: {e}")
+
+# 这些状态的订单已不再可成交，不能阻塞新单或被重复撤销。
+TERMINAL_ORDER_STATUSES = {
+    OrderStatus.FILLED_ALL, OrderStatus.CANCELLED_ALL, OrderStatus.FAILED,
+    OrderStatus.DISABLED, OrderStatus.DELETED, OrderStatus.FILL_CANCELLED,
+    OrderStatus.SUBMIT_FAILED, OrderStatus.TIMEOUT,
+}
 
 class AutoTrader:
     """自动交易执行器"""
@@ -39,12 +52,12 @@ class AutoTrader:
         self.quote_ctx = None
         self.trade_ctx = None
         self.hk_trade_ctx = None
-        self.closed_trades_file = '/home/admin/.openclaw/workspace-stock/data/closed-trades.json'
-        self.open_positions_file = '/home/admin/.openclaw/workspace-stock/data/open-positions.json'
-        self.staged_reductions_file = '/home/admin/.openclaw/workspace-stock/data/staged-reductions.json'
-        self._vix_cache = {'value': None, 'timestamp': 0}
+        self.closed_trades_file = str(DATA_DIR / 'closed-trades.json')
+        self.open_positions_file = str(DATA_DIR / 'open-positions.json')
+        self.staged_reductions_file = str(DATA_DIR / 'staged-reductions.json')
+        self._market_sentiment_cache = {'data': None, 'timestamp': 0}
     
-    def save_open_position(self, symbol, shares, entry_price, market='us', score=0, reasons=None):
+    def save_open_position(self, symbol, shares, entry_price, market='us', score=0, reasons=None, risk_targets=None):
         """保存入场记录
         
         Args:
@@ -54,6 +67,8 @@ class AutoTrader:
             market: 市场（us/hk）
             score: 开仓评分
             reasons: 开仓原因列表（技术信号、新闻等）
+            risk_targets: 入场时 _calc_risk_targets 算出的动态风控价位
+                          { 'atr', 'atr_stop', 'tp_first', 'tp_trend', 'hard_stop', 'staged_first' }
         """
         try:
             positions = []
@@ -66,7 +81,7 @@ class AutoTrader:
             # 检查是否已存在
             positions = [p for p in positions if p.get('symbol') != symbol]
             
-            positions.append({
+            record = {
                 'symbol': symbol,
                 'shares': shares,
                 'entry_price': entry_price,
@@ -76,37 +91,76 @@ class AutoTrader:
                 'entry_reasons': reasons or [],
                 'peak_pnl_pct': 0.0,  # 峰值浮盈
                 'peak_time': datetime.now().isoformat()
-            })
+            }
+            # 2026-06-29 east 新增：把 ATR 动态风控价落盘，run() 平仓时按这些价位判定
+            if isinstance(risk_targets, dict):
+                for k in ('atr', 'atr_stop', 'tp_first', 'tp_trend', 'hard_stop', 'staged_first'):
+                    v = risk_targets.get(k)
+                    if v is not None:
+                        record[k] = v
+            positions.append(record)
             
             with open(self.open_positions_file, 'w') as f:
                 json.dump(positions, f, ensure_ascii=False, indent=2)
-            print(f"   💾 已记录入场: {symbol} @ ${entry_price} (评分{score})")
+            atr_note = ''
+            if isinstance(risk_targets, dict) and risk_targets.get('atr_stop'):
+                atr_note = f" ATR止损${risk_targets.get('atr_stop')} 止盈${risk_targets.get('tp_trend') or risk_targets.get('tp_first')}"
+            print(f"   💾 已记录入场: {symbol} @ ${entry_price} (评分{score}){atr_note}")
         except Exception as e:
             print(f"   ⚠️ 记录入场失败: {e}")
     
     def update_peak_profit(self, symbol, current_pnl_pct):
-        """更新持仓峰值浮盈"""
+        """更新持仓峰值浮盈。pl_ratio 在 Futu 中已是百分比数值，如 4.2 表示 +4.2%。"""
         try:
             try:
                 with open(self.open_positions_file, 'r') as f:
                     positions = json.load(f)
             except:
                 return
-            
+
+            target = self.normalize_symbol(symbol)
             updated = False
             for p in positions:
-                if p.get('symbol') == symbol:
-                    if current_pnl_pct > p.get('peak_pnl_pct', 0):
-                        p['peak_pnl_pct'] = current_pnl_pct
+                if self.normalize_symbol(p.get('symbol', '')) == target:
+                    if float(current_pnl_pct or 0) > float(p.get('peak_pnl_pct', 0) or 0):
+                        p['peak_pnl_pct'] = float(current_pnl_pct or 0)
                         p['peak_time'] = datetime.now().isoformat()
                         updated = True
-            
+
             if updated:
                 with open(self.open_positions_file, 'w') as f:
                     json.dump(positions, f, ensure_ascii=False, indent=2)
         except:
             pass
-    
+
+    def get_peak_profit(self, symbol, current_pnl_pct=0):
+        """读取单票峰值浮盈；找不到入场记录时用当前浮盈兜底。"""
+        try:
+            target = self.normalize_symbol(symbol)
+            with open(self.open_positions_file, 'r') as f:
+                positions = json.load(f)
+            for p in positions:
+                if self.normalize_symbol(p.get('symbol', '')) == target:
+                    return float(p.get('peak_pnl_pct', current_pnl_pct) or 0)
+        except:
+            pass
+        try:
+            return float(current_pnl_pct or 0)
+        except:
+            return 0.0
+
+    def check_trailing_take_profit(self, symbol, current_pnl_pct, activation_pct=4.0, drawdown_pct=2.0):
+        """浮盈超过 activation_pct 后，较峰值回撤 drawdown_pct 个百分点则触发止盈。"""
+        try:
+            current = float(current_pnl_pct or 0)
+        except:
+            current = 0.0
+        peak = self.get_peak_profit(symbol, current)
+        drawdown = peak - current
+        if peak >= activation_pct and drawdown >= drawdown_pct:
+            return True, f'移动止盈触发(峰值浮盈{peak:+.2f}%，当前{current:+.2f}%，回撤{drawdown:.2f}%≥{drawdown_pct:.2f}%)'
+        return False, ''
+
     def remove_open_position(self, symbol):
         """移除入场记录"""
         try:
@@ -138,8 +192,10 @@ class AutoTrader:
             return None
     
     def _lookup_entry_context(self, symbol):
-        """从 open-positions.json 查询入场上下文（score/reasons）。
+        """从 open-positions.json 查询入场上下文（score/reasons/风控价位）。
         2026-06-24 east 补：止损/止盈记录落盘时需要带上这些信息。
+        2026-07-10 修复：补全 atr_stop/tp_trend/tp_first/entry_price，
+        否则主循环的 ATR 动态止损/止盈全部取到 None，等于失效。
         """
         try:
             with open(self.open_positions_file, 'r') as f:
@@ -150,10 +206,14 @@ class AutoTrader:
                     return {
                         'entry_score': int(pos.get('entry_score', 0) or 0),
                         'entry_reasons': pos.get('entry_reasons', []) or [],
+                        'atr_stop': pos.get('atr_stop'),
+                        'tp_trend': pos.get('tp_trend'),
+                        'tp_first': pos.get('tp_first'),
+                        'entry_price': pos.get('entry_price'),
                     }
         except Exception:
             pass
-        return {'entry_score': 0, 'entry_reasons': []}
+        return {'entry_score': 0, 'entry_reasons': [], 'atr_stop': None, 'tp_trend': None, 'tp_first': None, 'entry_price': None}
 
     def save_closed_trade(self, symbol, side, shares, entry_price, exit_price, pnl_pct, reason, market='us', stop_type=None, entry_score=0, llm_review=None, entry_reasons=None):
         """保存平仓记录
@@ -217,12 +277,12 @@ class AutoTrader:
     def load_config(self):
         """加载配置"""
         # 直接使用默认配置（不需要配置文件）
-        self.us_config = {'min_score': 80, 'opp_alert_score': 90, 'position_size': 0.12, 'max_positions': 999}
-        self.hk_config = {'min_score': 70, 'position_size': 0.03, 'max_positions': 999}
+        self.us_config = {'min_score': 75, 'opp_alert_score': 85, 'position_size': 0.12, 'max_positions': 999}
+        self.hk_config = {'min_score': 75, 'position_size': 0.03, 'max_positions': 999}
         self.risk_config = {
             'us_single_position_limit': 0.12,
             'us_total_position_limit': 1.0,   # 总仓位无上限（VIX高位会单向收紧到 50% / 0%）
-            'hk_single_position_limit': 0.03,
+            'hk_single_position_limit': 0.06,
             'hk_total_position_limit': 1.0,
         }
         self.cooldown_seconds = 86400  # 24小时冷却：同一标的一天内不重复交易
@@ -232,21 +292,20 @@ class AutoTrader:
         
         # 兼容旧代码
         self.config = {
-            'min_score': self.us_config.get('min_score', 80),
+            'min_score': self.us_config.get('min_score', 75),
             'max_positions': self.us_config.get('max_positions', 999),
             'position_size': self.us_config.get('position_size', 0.12),
         }
         
         try:
-            with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-                keys = json.load(f)
+            keys = load_api_keys()
             self.feishu_chat_id = keys.get('feishu', {}).get('chatId', '') or keys.get('feishu', {}).get('openId', '')
         except:
             pass
     
     def _load_notify_cooldowns(self):
         """加载持久化的通知冷却记录（跨进程）。只读未过期的条目。"""
-        path = '/home/admin/.openclaw/workspace-stock/data/notify-cooldowns.json'
+        path = str(DATA_DIR / 'notify-cooldowns.json')
         self.notify_cooldown_file = path
         try:
             with open(path, 'r') as f:
@@ -264,7 +323,7 @@ class AutoTrader:
     def _save_notify_cooldowns(self):
         """落盘通知冷却记录。只保存 opp_/notify_ 前缀的跨进程冷却项，
         避免把仅当进程生命周期内使用的 recently_closed[symbol] 也写进去。"""
-        path = getattr(self, 'notify_cooldown_file', '/home/admin/.openclaw/workspace-stock/data/notify-cooldowns.json')
+        path = getattr(self, 'notify_cooldown_file', str(DATA_DIR / 'notify-cooldowns.json'))
         try:
             now = time.time()
             persistent = {
@@ -299,15 +358,15 @@ class AutoTrader:
             except:
                 pass
         try:
-            self.quote_ctx = OpenQuoteContext('127.0.0.1', 11111)
+            self.quote_ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             
             # 模拟盘不需要解锁，直接创建交易上下文
             # 美股交易上下文 (2026-06-26 east: futu-api 10.8 废弃 OpenUSTradeContext、OpenHKTradeContext，统一用 OpenSecTradeContext)
-            self.trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.US, host='127.0.0.1', port=11111,
+            self.trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.US, host=FUTU_HOST, port=FUTU_PORT,
                                                   security_firm=SecurityFirm.FUTUSECURITIES)
             
             # 港股交易上下文
-            self.hk_trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.HK, host='127.0.0.1', port=11111,
+            self.hk_trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.HK, host=FUTU_HOST, port=FUTU_PORT,
                                                      security_firm=SecurityFirm.FUTUSECURITIES)
             
             print("✅ 连接Futu OpenD成功")
@@ -391,7 +450,7 @@ class AutoTrader:
             ctx = self.quote_ctx
             close_after = False
             if ctx is None:
-                ctx = OpenQuoteContext('127.0.0.1', 11111)
+                ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
                 close_after = True
             try:
                 ret, data = ctx.get_stock_basicinfo(Market.HK, SecurityType.STOCK, [symbol])
@@ -447,7 +506,7 @@ class AutoTrader:
         result = None
         try:
             mkt = Market.HK if market == 'hk' else Market.US
-            quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            quote_ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
             try:
                 ret, data = quote_ctx.request_trading_days(
                     market=mkt, start=date.isoformat(), end=date.isoformat()
@@ -559,7 +618,7 @@ class AutoTrader:
             ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
             pending_orders = []
             if ret == RET_OK and orders is not None:
-                pending = orders[orders['order_status'] != 'FILLED_ALL']
+                pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
                 for o in pending.itertuples():
                     pending_orders.append(o.code.replace('US.', '').replace('HK.', ''))
                 if pending_orders:
@@ -616,8 +675,8 @@ class AutoTrader:
                 print(f"⚠️ 读取{market_name}机会失败: {e}")
                 return []
 
-        opportunities['us'] = load_fresh('/home/admin/.openclaw/workspace-stock/data/us-opportunities.json', '美股')
-        opportunities['hk'] = load_fresh('/home/admin/.openclaw/workspace-stock/data/hk-opportunities.json', '港股')
+        opportunities['us'] = load_fresh(str(DATA_DIR / 'us-opportunities.json'), '美股')
+        opportunities['hk'] = load_fresh(str(DATA_DIR / 'hk-opportunities.json'), '港股')
         return opportunities
 
     def find_opportunity(self, symbol, market='us'):
@@ -708,7 +767,7 @@ class AutoTrader:
 
         # 机会文件上下文（新闻情绪等）
         try:
-            opp = self.find_opportunity(symbol, market)
+            opp = opp_override if isinstance(opp_override, dict) and opp_override else self.find_opportunity(symbol, market)
             if opp:
                 payload.setdefault('sentiment', opp.get('sentiment', '中性'))
                 payload.setdefault('change_pct', opp.get('change_pct', 0))
@@ -790,12 +849,25 @@ class AutoTrader:
                     sl = ti.get_stop_loss(symbol, atr_mult_stop)
                     tp = ti.get_take_profit(symbol, atr_mult_tp)
                     if sl is not None and price > 0:
-                        atr_value = round(abs(price - float(sl)) / atr_mult_stop, 4)
+                        # 2026-07-10 修复: get_stop_loss 返回 current_price - ATR*mult,
+                        # 但止损应基于入场价而非K线最新价(可能因除权/合股脱节)
+                        # 用 K线最新价和 sl 反推 ATR, 再用入场价重算止损止盈
+                        kline = ti.get_kline(symbol, 60)
+                        if kline is not None:
+                            cur = kline['close'].iloc[-1] if 'close' in kline else kline['Close'].iloc[-1]
+                        else:
+                            cur = price  # fallback
+                        atr_value = round(abs(float(cur) - float(sl)) / atr_mult_stop, 4)
                         targets['atr'] = atr_value
-                        targets['atr_stop'] = round(float(sl), 2)
+                        # 止损 = 入场价 - ATR*mult (确保在入场价下方)
+                        targets['atr_stop'] = round(price - atr_value * atr_mult_stop, 2)
                         targets['tp_first'] = round(price + atr_value * 2.0, 2)
                     if tp is not None:
-                        targets['tp_trend'] = round(float(tp), 2)
+                        # 趋势止盈也基于入场价重算
+                        if targets['atr']:
+                            targets['tp_trend'] = round(price + targets['atr'] * atr_mult_tp, 2)
+                        else:
+                            targets['tp_trend'] = round(float(tp), 2)
                 except Exception as e:
                     print(f"⚠️ 计算 ATR 风控失败 {symbol}: {e}")
                 try:
@@ -822,16 +894,16 @@ class AutoTrader:
         targets['rule_note'] = '\n'.join(rule_lines)
         return targets
 
-    def build_dynamic_signal_details(self, symbol, market='us', score=0, llm_analysis=None, reasons=None):
-        """构造飞书通知的真实四源评分、信号类型和LLM结论。
+    def build_dynamic_signal_details(self, symbol, market='us', score=0, llm_analysis=None, reasons=None, opp_override=None):
+        """构造飞书通知的真实五源评分、信号类型和LLM结论。
 
         2026-06-24 east 重构：
           - 删除全部“按比例硬拆”逻辑
-          - 优先读 opportunities.json 中 four_source_scorer 写入的真实分项
-          - 没有真实分项时当场调 four_source_scorer.score_all
+          - 优先读 opportunities.json 中 five-source 评分器写入的真实分项
+          - 缺真实分项时标记未覆盖，不在通知阶段补算
           - 所有分项携带 available_* 和 evidence_*
         """
-        opp = self.find_opportunity(symbol, market)
+        opp = opp_override if isinstance(opp_override, dict) and opp_override else self.find_opportunity(symbol, market)
 
         def num(value, default=0):
             try:
@@ -839,49 +911,39 @@ class AutoTrader:
             except Exception:
                 return default
 
-        # 1) 优先读 opportunities.json 中真实四源分项与证据
+        # 1) 优先读 opportunities.json 中真实分项与证据
         score_news = opp.get('score_news')
         score_announce = opp.get('score_announce')
         score_community = opp.get('score_community')
         score_institution = opp.get('score_institution')
+        score_capital = opp.get('score_capital')
         available_news = opp.get('available_news')
         available_announce = opp.get('available_announce')
         available_community = opp.get('available_community')
         available_institution = opp.get('available_institution')
+        available_capital = opp.get('available_capital')
         evidence_news = opp.get('evidence_news', '')
         evidence_announce = opp.get('evidence_announce', '')
         evidence_community = opp.get('evidence_community', '')
         evidence_institution = opp.get('evidence_institution', '')
+        evidence_capital = opp.get('evidence_capital', '')
 
-        # 2) 没有真实分项时当场跑一次
-        if score_news is None or available_news is None:
-            try:
-                sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
-                from four_source_scorer import score_all as _fs_score_all
-                fs = _fs_score_all(symbol, market)
-                score_news = fs['score_news']
-                score_announce = fs['score_announce']
-                score_community = fs['score_community']
-                score_institution = fs['score_institution']
-                available_news = fs['available_news']
-                available_announce = fs['available_announce']
-                available_community = fs['available_community']
-                available_institution = fs['available_institution']
-                evidence_news = fs['evidence_news']
-                evidence_announce = fs['evidence_announce']
-                evidence_community = fs['evidence_community']
-                evidence_institution = fs['evidence_institution']
-                print(f"ℹ️ {symbol} 通知前现算四源: 资讯{score_news}/公告{score_announce}/社区{score_community}/机构{score_institution}")
-            except Exception as e:
-                print(f"⚠️ {symbol} 四源评分不可用，全部记为未覆盖: {e}")
-                score_news = score_announce = score_community = score_institution = 0
-                available_news = available_announce = available_community = available_institution = False
-                evidence_news = evidence_announce = evidence_community = evidence_institution = f'评分器异常: {e}'
+        # 2) JSON 缺字段时用 0/False 兜底（scanner 已跑过 score_all，不重跑）
+        if score_news is None: score_news = 0
+        if score_announce is None: score_announce = 0
+        if score_community is None: score_community = 0
+        if score_institution is None: score_institution = 0
+        if score_capital is None: score_capital = 0
+        if available_news is None: available_news = False
+        if available_announce is None: available_announce = False
+        if available_community is None: available_community = False
+        if available_institution is None: available_institution = False
+        if available_capital is None: available_capital = False
 
         # 3) 计算总分：优先用扫描器商定的 final_score
         score_total = opp.get('final_score') or opp.get('score') or opp.get('base_score')
         if score_total is None:
-            score_total = (score_news or 0) + (score_announce or 0) + (score_community or 0) + (score_institution or 0)
+            score_total = (score_news or 0) + (score_announce or 0) + (score_community or 0) + (score_institution or 0) + (score_capital or 0)
 
         # 5) LLM 验真结论
         llm_conclusion = ''
@@ -907,7 +969,29 @@ class AutoTrader:
                     'volume_ratio': num(opp.get('volume_ratio', 1.0), 1.0),
                     'atr': num(opp.get('atr', 0), 0),
                     'sentiment': opp.get('sentiment', '中性'),
+                    'score_news': score_news or 0,
+                    'score_announce': score_announce or 0,
+                    'score_community': score_community or 0,
+                    'score_institution': score_institution or 0,
+                    'score_capital': score_capital or 0,
+                    'evidence_announce': evidence_announce,
+                    'evidence_community': evidence_community,
+                    'evidence_institution': evidence_institution,
+                    'evidence_capital': evidence_capital,
+                    'capital_direction': opp.get('capital_direction', ''),
+                    'community_bull_pct': opp.get('community_bull_pct', 0),
+                    'community_bear_pct': opp.get('community_bear_pct', 0),
+                    'community_post_count': opp.get('community_post_count', 0),
                 }
+                for context_key in (
+                    'macd', 'macd_signal', 'macd_state', 'ma20_slope_pct',
+                    'return_5d_pct', 'return_20d_pct', 'distance_20d_high_pct',
+                    'intraday_drawdown_pct', 'price_above_ma20', 'price_above_ma50',
+                    'market_cap', 'trailing_pe', 'forward_pe', 'pb_ratio',
+                    'revenue_growth', 'earnings_growth', 'profit_margin',
+                    'trailing_eps', 'revenue', 'net_profit', 'sector',
+                ):
+                    market_data[context_key] = opp.get(context_key)
                 fresh_llm = analyze_stock(symbol, market_data)
                 fresh_reason = fresh_llm.get('llm_reason', '')
                 if fresh_reason and not any(marker in fresh_reason for marker in invalid_llm_markers):
@@ -935,12 +1019,13 @@ class AutoTrader:
                 signal_type = f'边缘共振 ({int(st)}分)'
             else:
                 signal_type = f'评分不足 ({int(st)}分)'
-        # 未覆盖维度清单（44 east）
+        # 未覆盖维度清单
         uncovered_keys = []
         if not available_news: uncovered_keys.append('news')
         if not available_announce: uncovered_keys.append('announce')
         if not available_community: uncovered_keys.append('community')
         if not available_institution: uncovered_keys.append('institution')
+        if not available_capital: uncovered_keys.append('capital')
 
         return {
             'score_total': int(num(score_total, 0)),
@@ -948,14 +1033,17 @@ class AutoTrader:
             'score_announce': int(num(score_announce, 0)),
             'score_community': int(num(score_community, 0)),
             'score_institution': int(num(score_institution, 0)),
+            'score_capital': int(num(score_capital, 0)),
             'available_news': bool(available_news),
             'available_announce': bool(available_announce),
             'available_community': bool(available_community),
             'available_institution': bool(available_institution),
+            'available_capital': bool(available_capital),
             'evidence_news': evidence_news,
             'evidence_announce': evidence_announce,
             'evidence_community': evidence_community,
             'evidence_institution': evidence_institution,
+            'evidence_capital': evidence_capital,
             'uncovered_keys': uncovered_keys,
             'estimated_keys': uncovered_keys,  # 向后兼容
             'signal_type': signal_type,
@@ -990,7 +1078,7 @@ class AutoTrader:
         
         return True, "可以交易"
     
-    def execute_trade(self, symbol, side, quantity, price, market='us', force=False, skip_llm=False, score=0, reasons=None, entry_price_override=None):
+    def execute_trade(self, symbol, side, quantity, price, market='us', force=False, skip_llm=False, score=0, reasons=None, entry_price_override=None, opp=None):
         """执行交易
         
         Args:
@@ -1017,7 +1105,7 @@ class AutoTrader:
         # 止损交易跳过LLM分析
         llm_analysis = None
         if not skip_llm:
-            llm_analysis = self.llm_analysis_before_trade(symbol, price, market)
+            llm_analysis = self.llm_analysis_before_trade(symbol, price, market, opp=opp)
             
             # LLM分析失败或被阻止
             if not llm_analysis:
@@ -1071,7 +1159,7 @@ class AutoTrader:
             if not force:
                 ret, orders = check_ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
                 if ret == RET_OK and orders is not None:
-                    pending = orders[orders['order_status'] != 'FILLED_ALL']
+                    pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
                     pending_symbols = [o.code.replace('US.', '').replace('HK.', '') for o in pending.itertuples()]
                     if trade_sym in pending_symbols:
                         print(f"⚠️ {symbol} 有未完成订单，取消下单")
@@ -1108,12 +1196,21 @@ class AutoTrader:
                     score=score,
                     llm_analysis=llm_analysis,
                     reasons=reasons,
+                    opp_override=opp,
                 )
 
             # 入场记录（买入时）——使用综合评分 final_score 保持与飞书通知一致
+            # 2026-06-29 east: 入场时同步落盘 ATR 动态风控价位，供 run() 平仓判定使用
+            entry_risk_targets = None
             if side == 'BUY':
                 entry_score = signal_details.get('score_total', score) if signal_details else score
-                self.save_open_position(symbol, quantity, price, market, score=entry_score, reasons=reasons)
+                try:
+                    entry_risk_targets = self._calc_risk_targets(symbol, price, market)
+                except Exception as _e:
+                    print(f"   ⚠️ 计算入场风控价位失败: {_e}")
+                    entry_risk_targets = None
+                self.save_open_position(symbol, quantity, price, market, score=entry_score, reasons=reasons,
+                                        risk_targets=entry_risk_targets)
             
             # 使用新模板发送通知
             from feishu_pusher import FeishuPusher
@@ -1121,7 +1218,8 @@ class AutoTrader:
             amount = quantity * price
             if side == 'BUY':
                 # 2026-06-24 east 修复：不再泰以死板 -6%/+8% 充当目标价，改为 ATR 动态规则
-                risk = self._calc_risk_targets(symbol, price, market)
+                # 2026-06-29 east: 复用上面计算过的入场风控价，避免算两遍
+                risk = entry_risk_targets if entry_risk_targets else self._calc_risk_targets(symbol, price, market)
                 pusher.send_buy_notification(
                     symbol=symbol,
                     quantity=quantity,
@@ -1135,6 +1233,7 @@ class AutoTrader:
                     score_announce=signal_details['score_announce'],
                     score_community=signal_details['score_community'],
                     score_institution=signal_details['score_institution'],
+                    score_capital=signal_details['score_capital'],
                     signal_type=signal_details['signal_type'],
                     llm_conclusion=signal_details['llm_conclusion'],
                     estimated_keys=signal_details.get('estimated_keys', []),
@@ -1143,6 +1242,7 @@ class AutoTrader:
                         'announce': signal_details.get('evidence_announce', ''),
                         'community': signal_details.get('evidence_community', ''),
                         'institution': signal_details.get('evidence_institution', ''),
+                        'capital': signal_details.get('evidence_capital', ''),
                     },
                     order_id=result,
                     timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1184,7 +1284,7 @@ class AutoTrader:
                 # 3) Fallback A：从 trades.json (富途账户同步) 拿 cost_price
                 if entry_price <= 0 or sell_pnl_pct == 0.0:
                     try:
-                        with open('/home/admin/.openclaw/workspace-stock/data/trades.json', 'r') as f:
+                        with open(str(DATA_DIR / 'trades.json'), 'r') as f:
                             tdata = json.load(f)
                         target = self.normalize_symbol(symbol)
                         for fp in tdata.get('positions', []):
@@ -1218,7 +1318,7 @@ class AutoTrader:
                 # 5) Fallback C：从 closed-trades.json 拿刚刚亲手写的 entry_price/pnl_pct　
                 if (entry_price <= 0 or sell_pnl_pct == 0.0):
                     try:
-                        with open('/home/admin/.openclaw/workspace-stock/data/closed-trades.json', 'r') as f:
+                        with open(str(DATA_DIR / 'closed-trades.json'), 'r') as f:
                             ctrades = json.load(f)
                         target = self.normalize_symbol(symbol)
                         # 逆序：取最近一条与当前价接近的记录
@@ -1280,7 +1380,7 @@ class AutoTrader:
         美股v1.6要求:
         - MA20 > MA50, 价格 > MA20
         - 技术信号 >= 2
-        - 成交量 >= 1.8x
+        - 成交量 >= 1.2x（>=1.8x为强放量）
         - RSI < 65
         
         港股v2.0要求:
@@ -1364,13 +1464,21 @@ class AutoTrader:
         return value
 
     def get_score_based_position(self, score, market='us'):
-        """按评分计算目标仓位。美股按8%-12%动态调整，港股沿用3%。"""
-        if market != 'us':
-            return self.hk_config.get('position_size', 0.03)
+        """按评分计算目标仓位。美股8%-12%，港股3%-6%。"""
         try:
             score = float(score or 0)
         except:
             score = 0
+        if market != 'us':
+            if score < 80:
+                return 0.0
+            if score < 85:
+                return 0.03
+            if score < 90:
+                return 0.04
+            if score < 95:
+                return 0.05
+            return 0.06
         if score < 80:
             return 0.0
         if score < 85:
@@ -1381,30 +1489,39 @@ class AutoTrader:
             return 0.11 + (score - 90) * 0.0025  # 90-94: 11%-12%
         return 0.12
 
-    def get_vix_multiplier(self):
-        """根据VIX返回美股开仓仓位系数。"""
+    def get_market_sentiment_multiplier(self):
+        """根据日报同源的美股综合市场情绪返回美股总仓位上限。"""
         now = time.time()
-        cached_vix = self._vix_cache.get('value')
-        if cached_vix is not None and now - self._vix_cache.get('timestamp', 0) < 300:
-            vix = cached_vix
+        cached = self._market_sentiment_cache.get('data')
+        if cached is not None and now - self._market_sentiment_cache.get('timestamp', 0) < 1800:
+            sentiment = cached
         else:
             try:
-                from vix_fetcher import get_vix_index
-                vix = float(get_vix_index())
+                from us_market_sentiment import USMarketSentiment
+                sentiment = USMarketSentiment().get_market_sentiment()
+                if not sentiment:
+                    raise ValueError('USMarketSentiment 返回空数据')
             except Exception as e:
-                print(f"⚠️ 获取VIX失败，使用默认20: {e}")
-                vix = 20.0
-            self._vix_cache = {'value': vix, 'timestamp': now}
+                print(f"⚠️ 获取美股市场情绪失败，使用中性50: {e}")
+                sentiment = {'sentiment_score': 50, 'sentiment_label': '中性'}
+            self._market_sentiment_cache = {'data': sentiment, 'timestamp': now}
 
-        if vix < 20:
-            return 1.0, vix, 'VIX<20，正常开仓', None
-        if vix <= 25:
-            return 0.8, vix, 'VIX 20-25，仓位8折', None
-        if vix <= 30:
-            return 0.6, vix, 'VIX 25-30，仓位6折，总仓位上限不高于50%', 0.50
-        return 0.0, vix, 'VIX>30，暂停开仓', 0.0
+        score = float(sentiment.get('sentiment_score', 50) or 50)
+        label = sentiment.get('sentiment_label', '中性')
+        if score >= 65:
+            return 1.0, score, f'美股市场情绪{score:.0f}/100({label})，总仓位上限100%', 1.0, sentiment
+        if score >= 55:
+            return 0.9, score, f'美股市场情绪{score:.0f}/100({label})，总仓位上限90%', 0.90, sentiment
+        if score >= 45:
+            return 0.8, score, f'美股市场情绪{score:.0f}/100({label})，总仓位上限80%', 0.80, sentiment
+        if score >= 35:
+            return 0.6, score, f'美股市场情绪{score:.0f}/100({label})，总仓位上限60%', 0.60, sentiment
+        if score >= 25:
+            return 0.5, score, f'美股市场情绪{score:.0f}/100({label})，总仓位上限50%', 0.50, sentiment
+        return 0.0, score, f'美股市场情绪{score:.0f}/100({label})，暂停开仓', 0.0, sentiment
 
-    def check_position_limits(self, account, symbol, order_value, market='us'):
+
+    def check_position_limits(self, account, symbol, order_value, market='us', total_limit_override=None):
         """用实际订单金额检查单票和总仓位硬限制。"""
         total_assets = float((account or {}).get('total_assets', 0) or 0)
         if total_assets <= 0:
@@ -1412,6 +1529,8 @@ class AutoTrader:
 
         single_limit = self.risk_config.get(f'{market}_single_position_limit', 0.12)
         total_limit = self.risk_config.get(f'{market}_total_position_limit', 1.0)
+        if total_limit_override is not None:
+            total_limit = min(total_limit, float(total_limit_override))
         current_total_value = self.get_account_position_value(account)
         current_symbol_value = self.get_symbol_position_value(account, symbol)
         after_symbol_value = current_symbol_value + order_value
@@ -1455,23 +1574,27 @@ class AutoTrader:
         total_limit = self.risk_config.get(f'{market}_total_position_limit', 1.0)
         base_pct = min(self.get_score_based_position(score, market), single_limit)
         multiplier = 1.0
-        vix = None
-        vix_reason = ''
+        market_sentiment_score = None
+        market_sentiment_reason = ''
+        market_sentiment_data = None
 
-        vix_total_limit = None
-        multiplier, vix, vix_reason, vix_total_limit = self.get_vix_multiplier()
-        if multiplier <= 0:
-            return {
-                'can_buy': False,
-                'reason': f'{vix_reason} (VIX={vix:.1f})',
-                'quantity': 0,
-                'vix': vix,
-                'vix_multiplier': multiplier,
-            }
-        if vix_total_limit is not None:
-            total_limit = min(total_limit, vix_total_limit)
+        sentiment_total_limit = None
+        if market == 'us':
+            multiplier, market_sentiment_score, market_sentiment_reason, sentiment_total_limit, market_sentiment_data = self.get_market_sentiment_multiplier()
+            if multiplier <= 0:
+                return {
+                    'can_buy': False,
+                    'reason': market_sentiment_reason,
+                    'quantity': 0,
+                    'market_sentiment_score': market_sentiment_score,
+                    'market_sentiment_multiplier': multiplier,
+                    'market_sentiment_reason': market_sentiment_reason,
+                    'market_sentiment': market_sentiment_data,
+                }
+            if sentiment_total_limit is not None:
+                total_limit = min(total_limit, sentiment_total_limit)
 
-        target_pct = min(base_pct * multiplier, single_limit)
+        target_pct = min(base_pct, single_limit)
         target_value = total_assets * target_pct
         current_total_value = self.get_account_position_value(account)
         current_symbol_value = self.get_symbol_position_value(account, symbol)
@@ -1503,7 +1626,7 @@ class AutoTrader:
             }
 
         # 守卫：实际下单仓位 < 目标仓位的50% 视为废单（如1股0.00%），直接放弃
-        # 动态目标仓位是根据评分/VIX算出来的，低于一半说明现金/风控钳得太死，下了也只是占坑
+        # 动态目标仓位由个股评分算出，市场情绪只控制美股总仓位上限；低于一半说明现金/风控钳得太死，下了也只是占坑
         if target_value > 0 and order_value < target_value * 0.5:
             actual_pct = (order_value / total_assets * 100) if total_assets > 0 else 0
             target_pct_disp = (target_value / total_assets * 100) if total_assets > 0 else 0
@@ -1517,7 +1640,7 @@ class AutoTrader:
                 'order_value': order_value,
             }
 
-        position_check, reason = self.check_position_limits(account, symbol, order_value, market)
+        position_check, reason = self.check_position_limits(account, symbol, order_value, market, total_limit_override=total_limit)
         if not position_check.get('can_add_position', False):
             return {
                 'can_buy': False,
@@ -1536,9 +1659,10 @@ class AutoTrader:
             'allowed_value': allowed_value,
             'base_pct': base_pct,
             'target_pct': target_pct,
-            'vix': vix,
-            'vix_multiplier': multiplier,
-            'vix_reason': vix_reason,
+            'market_sentiment_score': market_sentiment_score,
+            'market_sentiment_multiplier': multiplier,
+            'market_sentiment_reason': market_sentiment_reason,
+            'market_sentiment': market_sentiment_data,
             **position_check,
         }
     
@@ -1625,7 +1749,7 @@ class AutoTrader:
     def has_major_negative_alert(self, symbol):
         """检查是否有结构化重大利空命中该标的。"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/alerts.json', 'r') as f:
+            with open(str(DATA_DIR / 'alerts.json'), 'r') as f:
                 data = json.load(f)
         except:
             return False, ''
@@ -1751,11 +1875,20 @@ class AutoTrader:
             ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
             ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
             if ret == 0 and orders is not None:
-                pending = orders[orders['order_status'] != 'FILLED_ALL']
+                pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
                 for o in pending.itertuples():
                     if self.normalize_symbol(sym) == self.normalize_symbol(o.code):
-                        ctx.cancel_order(str(o.order_id))
-                        print(f"  撤销挂单: {o.order_id} ({o.code})")
+                        cancel_ret, cancel_data = ctx.modify_order(
+                            ModifyOrderOp.CANCEL,
+                            str(o.order_id),
+                            0,
+                            0,
+                            trd_env=TrdEnv.SIMULATE,
+                        )
+                        if cancel_ret == RET_OK:
+                            print(f"  撤销挂单: {o.order_id} ({o.code})")
+                        else:
+                            print(f"  ⚠️ 撤单失败 {o.order_id} ({o.code}): {cancel_data}")
         except Exception as e:
             print(f"  撤单失败: {e}")
 
@@ -1788,11 +1921,24 @@ class AutoTrader:
 
         shares = int(pos_data.get('shares', 0) or 0)
         price = self.get_position_price(pos_data)
+
+        # 2026-06-29 east 修复：staged 状态下也要听 "重大利空 → 全平" 这条规则。
+        # 否则一旦标的进入 stage1_done / tightened_stop，新利空被 staged 逻辑截胡，
+        # 永远走不到 run() 里 06-23 重构后的 "major_negative → 全平" 分支。
+        try:
+            major_negative, neg_reason = self.has_major_negative_alert(sym)
+        except Exception:
+            major_negative, neg_reason = False, ''
+        if major_negative and shares > 0:
+            print(f"  🚨 {key}: staged 状态下命中重大利空 → 立即全平剩余 {shares} 股 ({neg_reason})")
+            self.execute_position_sell(pos_data, shares, f'重大利空触发staged剩余全平: {neg_reason}'[:80], 'staged_major_negative_full_exit', market)
+            return True
+
         if item.get('status') == 'stage1_done':
             # 复核期硬止损：不管多久，一旦累计亏损 ≤ -10%，立即全平剩余仓位
             # 防止“首次触发-6.94% → 30分钟复核期被动挨打到-12%+”的场景
             try:
-                hard_stop_pl = float(pos_data.get('pl_ratio', 0) or 0) * 100  # pl_ratio是小数，转%
+                hard_stop_pl = float(pos_data.get('pl_ratio', 0) or 0)  # pl_ratio 富途API返回的是百分比(如-6.14表示-6.14%)，无需*100
             except Exception:
                 hard_stop_pl = 0.0
             if hard_stop_pl <= -10.0 and shares > 0:
@@ -1888,7 +2034,7 @@ class AutoTrader:
             ctx = self.quote_ctx
             if ctx is None:
                 from futu import OpenQuoteContext
-                ctx = OpenQuoteContext('127.0.0.1', 11111)
+                ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             ret, kl = ctx.get_cur_kline(full_sym, 6, KLType.K_1M, AuType.QFQ)
             if ret == 0 and kl is not None and len(kl) >= 2:
                 # 取最早一根（5分钟前）的开盘价 vs 最新一根的收盘价
@@ -1984,14 +2130,14 @@ class AutoTrader:
                 # 加载美股机会
                 opportunities = self.get_opportunities()
                 # 2026-06-25 east 决策：非交易时段保留高门槛（默认90），避免在凌晨推中等货
-                # 交易时段 min_score=80 走自动下单，这里走推送提醒，两者隔离
-                opp_threshold = self.us_config.get('opp_alert_score', 90)
-                us_high = [o for o in opportunities['us'] if o.get('score', 0) >= opp_threshold]
+                # 交易时段 min_score=75 走自动下单，这里走推送提醒，两者隔离
+                opp_threshold = self.us_config.get('opp_alert_score', 85)
+                us_high = [o for o in opportunities['us'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', 0)) >= opp_threshold]
 
                 # 发送美股机会
                 for o in us_high[:3]:
                     symbol = o.get('symbol', '')
-                    score = o.get('score', 0)
+                    score = o.get('final_score', o.get('score', 0))
                     # 冷却：24小时内同一个股票只发一次（持久化到 notify_cooldown_file，跨进程生效）
                     cool_key = f"opp_{symbol}"
                     last_ts = self.recently_closed.get(cool_key, 0)
@@ -2017,6 +2163,7 @@ class AutoTrader:
                             score_announce=signal_details['score_announce'],
                             score_community=signal_details['score_community'],
                             score_institution=signal_details['score_institution'],
+                            score_capital=signal_details['score_capital'],
                             signal_type=signal_details['signal_type'],
                             llm_conclusion=signal_details['llm_conclusion'],
                             estimated_keys=signal_details.get('estimated_keys', []),
@@ -2025,6 +2172,7 @@ class AutoTrader:
                                 'announce': signal_details.get('evidence_announce', ''),
                                 'community': signal_details.get('evidence_community', ''),
                                 'institution': signal_details.get('evidence_institution', ''),
+                                'capital': signal_details.get('evidence_capital', ''),
                             },
                             market_status=market_status,
                             timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -2058,6 +2206,7 @@ class AutoTrader:
         positions_to_stage_reduce = []
         stage_reduce_reasons = {}
         positions_to_take_profit = []
+        take_profit_reasons = {}
         
         # 修复：根据交易时间检查对应的账户持仓
         # 美股交易时间检查美股持仓，港股交易时间检查港股持仓
@@ -2086,19 +2235,34 @@ class AutoTrader:
             
             # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
             pl_pct = float(pos.get('pl_ratio', 0))  # 已经是百分比形式：-1.01 表示 -1.01%
-            
+            cur_price = self.get_position_price(pos)
+            entry_ctx = self._lookup_entry_context(sym) or {}
+            entry_atr_stop = entry_ctx.get('atr_stop')
+            entry_tp_trend = entry_ctx.get('tp_trend') or entry_ctx.get('tp_first')
+            entry_cost = float(entry_ctx.get('entry_price') or pos.get('cost_price', 0) or 0)
+
             # 更新峰值浮盈
             self.update_peak_profit(sym, pl_pct)
-            
-            print(f"  {sym}: 盈亏 {pl_pct:+.2f}%")
+
+            atr_stop_hit = entry_atr_stop and cur_price <= float(entry_atr_stop)
+            atr_tp_hit = entry_tp_trend and cur_price >= float(entry_tp_trend)
+            trailing_tp_hit, trailing_tp_reason = self.check_trailing_take_profit(sym, pl_pct)
+            log_extras = []
+            if entry_atr_stop:
+                log_extras.append(f"ATR止损${entry_atr_stop}")
+            if entry_tp_trend:
+                log_extras.append(f"ATR止盈${entry_tp_trend}")
+            extra_str = f" ({', '.join(log_extras)})" if log_extras else ''
+            print(f"  {sym}: 盈亏 {pl_pct:+.2f}% 现价${cur_price:.2f}{extra_str}")
 
             if self.process_staged_exit(pos, market_to_check):
                 continue
 
             major_negative, negative_reason = self.has_major_negative_alert(sym)
-            
-            # 止损条件：亏损超过6% 或结构化重大利空触发
-            if pl_pct < -6 or major_negative:
+
+            # 止损条件：动态 ATR 止损 或 固定 -6% 兜底 或 结构化重大利空触发
+            hit_stop = atr_stop_hit or pl_pct < -6 or major_negative
+            if hit_stop:
                 # 跳过刚平过的标的（防止重复平仓）
                 if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
                     print(f"    ⏭️ {sym} 刚平过，跳过")
@@ -2116,25 +2280,41 @@ class AutoTrader:
                         print(f"    ⚠️ 重大利空→直接全平! {negative_reason}")
                     continue
 
-                # 纯价格止损：判定是否插针
+                # ATR 动态止损命中：属于趋势性破位，直接全平
+                if atr_stop_hit:
+                    positions_to_close.append(sym)
+                    stage_reduce_reasons[sym] = f'ATR动态止损触发全平(现价${cur_price:.2f}≤${entry_atr_stop})'
+                    print(f"    ⚠️ ATR动态止损→直接全平! (现价${cur_price:.2f}≤止损线${entry_atr_stop}, 浮亏{pl_pct:+.2f}%)")
+                    continue
+
+                # 纯价格止损（-6%兜底，ATR未取到/失效时生效）：判定是否插针
                 is_flash, flash_reason = self.is_flash_crash_pattern(sym, market_to_check)
                 if is_flash:
                     positions_to_stage_reduce.append(sym)
-                    stage_reduce_reasons[sym] = '插针触发分级减仓'
+                    stage_reduce_reasons[sym] = '插针触发分级减仓(-6%兜底)'
                     print(f"    ⚠️ 插针模式→分级减仓! ({flash_reason}，亏损{pl_pct:+.2f}%)")
                 else:
                     positions_to_close.append(sym)
-                    stage_reduce_reasons[sym] = '趋势性下跌触发全平'
+                    stage_reduce_reasons[sym] = '趋势性下跌触发全平(-6%兜底)'
                     print(f"    ⚠️ 非插针→直接全平! ({flash_reason}，亏损{pl_pct:+.2f}%)")
-            
-            # 止盈条件：盈利超过8% (ATR止盈4.0-4.5x的简化)
-            elif pl_pct > 8:
+
+            # 止盈条件：移动止盈保护利润；ATR 趋势止盈保留。
+            elif trailing_tp_hit:
+                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
+                    print(f"    ⏭️ {sym} 刚平过，跳过")
+                    continue
+                positions_to_take_profit.append(sym)
+                take_profit_reasons[sym] = trailing_tp_reason
+                print(f"    🎯 {trailing_tp_reason}")
+
+            elif atr_tp_hit:
                 # 跳过刚平过的标的
                 if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
                     print(f"    ⏭️ {sym} 刚平过，跳过")
                     continue
                 positions_to_take_profit.append(sym)
-                print(f"    🎯 触发止盈! (盈利{pl_pct:.2f}% > 8%)")
+                take_profit_reasons[sym] = f'ATR动态止盈(现价${cur_price:.2f}≥${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)'
+                print(f"    🎯 触发ATR动态止盈! (现价${cur_price:.2f}≥止盈线${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)")
         
         # 执行分级减仓第一步
         print(f"  📋 分级减仓列表: {positions_to_stage_reduce}")
@@ -2214,14 +2394,15 @@ class AutoTrader:
                     except Exception as e:
                         print(f"  ⚠️ {sym}: 实时持仓核对失败 ({e})，按内存数据下单")
 
-                    print(f"  执行止盈: 卖出 {sym} {shares}股 @ ${price:.2f}")
-                    success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=['止盈'], entry_price_override=cost_price)
+                    take_profit_reason = take_profit_reasons.get(sym, '止盈')
+                    print(f"  执行止盈: 卖出 {sym} {shares}股 @ ${price:.2f} ({take_profit_reason})")
+                    success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=[take_profit_reason], entry_price_override=cost_price)
                     if success:
                         # 保存平仓记录（使用 Futu 的成本价）
                         llm_review = getattr(self, '_last_llm_review', None)
                         # 2026-06-24 east 修复: 同步入场上下文
                         ec = self._lookup_entry_context(full_sym)
-                        self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, '止盈', market,
+                        self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, take_profit_reason, market,
                                                 stop_type='take_profit', llm_review=llm_review,
                                                 entry_score=ec['entry_score'], entry_reasons=ec['entry_reasons'])
                         self._last_llm_review = None
@@ -2234,13 +2415,13 @@ class AutoTrader:
         
         # 处理美股
         if us_trading and us_account:
-            us_high = [o for o in opportunities['us'] if o.get('score', 0) >= self.config['min_score']]
+            us_high = [o for o in opportunities['us'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', 0)) >= self.config['min_score']]
             print(f"\n🇺🇸 美股高评分({self.config['min_score']}分+): {len(us_high)}只")
             
             for o in us_high[:3]:
                 symbol = o.get('symbol', '')
                 price = o.get('price', 0)
-                score = o.get('score', 0)
+                score = o.get('final_score', o.get('score', 0))
                 
                 # 检查扫描器中LLM是否未通过
                 if not o.get('llm_passed', True):
@@ -2269,13 +2450,13 @@ class AutoTrader:
                     quantity = order_plan['quantity']
                     print(
                         f"  💰 {symbol}: 评分仓位{order_plan['base_pct']*100:.1f}% "
-                        f"× VIX系数{order_plan.get('vix_multiplier', 1):.1f} "
+                        f"· 市场总仓位上限{order_plan['total_limit_pct']:.0f}% "
                         f"→ 实际金额${order_plan['order_value']:,.2f}, "
                         f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
                     )
                     # 构建开仓原因列表
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
-                    success = self.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', score=score, reasons=entry_reasons)
+                    success = self.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', skip_llm=True, score=score, reasons=entry_reasons, opp=o)
                     if success:
                         # 更新持仓计数和本轮内存市值，避免同一轮连续突破总仓位
                         us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
@@ -2288,7 +2469,7 @@ class AutoTrader:
         
         # 处理港股
         if hk_trading and hk_account:
-            hk_high = [o for o in opportunities['hk'] if o.get('base_score', 0) >= self.config['min_score']]
+            hk_high = [o for o in opportunities['hk'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', o.get('base_score', 0))) >= self.hk_config['min_score']]
             print(f"\n🇭🇰 港股高评分({self.config['min_score']}分+): {len(hk_high)}只")
             
             # 检查港股持仓数限制
@@ -2299,7 +2480,7 @@ class AutoTrader:
             for o in hk_high[:3]:
                 symbol = o.get('symbol', '')
                 price = o.get('price', 0)
-                score = o.get('base_score', 0)
+                score = o.get('final_score', o.get('score', o.get('base_score', 0)))
                 
                 # 检查扫描器中LLM是否未通过
                 if not o.get('llm_passed', True):
@@ -2333,7 +2514,7 @@ class AutoTrader:
                     )
                     # 构建开仓原因列表
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
-                    success = self.execute_trade(symbol, 'BUY', quantity, price, 'hk', score=score, reasons=entry_reasons)
+                    success = self.execute_trade(symbol, 'BUY', quantity, price, 'hk', skip_llm=True, score=score, reasons=entry_reasons, opp=o)
                     if success:
                         hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
                         hk_account['market_val'] = hk_account['total_assets'] * order_plan['after_total_pct'] / 100
@@ -2347,15 +2528,18 @@ class AutoTrader:
         print(f"✅ 检查完成")
         print(f"{'='*60}")
     
-    def llm_analysis_before_trade(self, symbol, price, market='us'):
+    def llm_analysis_before_trade(self, symbol, price, market='us', opp=None):
         """下单前的LLM分析
         
         触发条件：基础评分 ≥ 70分
         使用 ModelStudio API (qwen-plus) 进行分析
+
+        Args:
+            opp: 机会对象（含五源评分、资金异动、社区多空等），可选
         """
         try:
             # 导入LLM调用模块
-            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            sys.path.insert(0, str(STRATEGY_DIR))
             from llm_stock_analyzer import analyze_stock as llm_analyze
             
             # 准备股票数据（从行情获取更完整的数据）
@@ -2375,10 +2559,36 @@ class AutoTrader:
                 'base_score': 75  # 假设基础评分
             }
             
+            # 从机会对象补入五源评分明细
+            if opp:
+                stock_data['base_score'] = opp.get('score', opp.get('base_score', 75))
+                stock_data['score_news'] = opp.get('score_news', 0)
+                stock_data['score_announce'] = opp.get('score_announce', 0)
+                stock_data['score_community'] = opp.get('score_community', 0)
+                stock_data['score_institution'] = opp.get('score_institution', 0)
+                stock_data['score_capital'] = opp.get('score_capital', 0)
+                stock_data['evidence_announce'] = opp.get('evidence_announce', '')
+                stock_data['evidence_community'] = opp.get('evidence_community', '')
+                stock_data['evidence_institution'] = opp.get('evidence_institution', '')
+                stock_data['evidence_capital'] = opp.get('evidence_capital', '')
+                stock_data['capital_direction'] = opp.get('capital_direction', '')
+                stock_data['community_bull_pct'] = opp.get('community_bull_pct', 0)
+                stock_data['community_bear_pct'] = opp.get('community_bear_pct', 0)
+                stock_data['community_post_count'] = opp.get('community_post_count', 0)
+                for context_key in (
+                    'macd', 'macd_signal', 'macd_state', 'ma20_slope_pct',
+                    'return_5d_pct', 'return_20d_pct', 'distance_20d_high_pct',
+                    'intraday_drawdown_pct', 'price_above_ma20', 'price_above_ma50',
+                    'market_cap', 'trailing_pe', 'forward_pe', 'pb_ratio',
+                    'revenue_growth', 'earnings_growth', 'profit_margin',
+                    'trailing_eps', 'revenue', 'net_profit', 'sector',
+                ):
+                    stock_data[context_key] = opp.get(context_key)
+
             # 尝试从行情获取更多数据
             try:
                 from futu import OpenQuoteContext
-                ctx = OpenQuoteContext('127.0.0.1', 11111)
+                ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
                 ret, snapshot = ctx.get_market_snapshot([symbol])
                 if ret == 0 and not snapshot.empty:
                     row = snapshot.iloc[0]
@@ -2407,8 +2617,7 @@ class AutoTrader:
     def send_notification(self, message):
         """发送通知到飞书"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-                keys = json.load(f)
+            keys = load_api_keys()
             
             # 获取token
             url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -2515,17 +2724,30 @@ if __name__ == '__main__':
                         pl_pct = float(pos.get('pl_ratio', 0))
                         market_val = pos.get('market_val', 0)
                         price = market_val / shares if shares > 0 else 0
-                        
-                        print(f"[{now}]   {sym}: 盈亏 {pl_pct:+.2f}%")
+
+                        trader.update_peak_profit(sym, pl_pct)
+                        trailing_tp_hit_d, trailing_tp_reason_d = trader.check_trailing_take_profit(sym, pl_pct)
+
+                        entry_ctx_d = trader._lookup_entry_context(sym) or {}
+                        e_atr_stop = entry_ctx_d.get('atr_stop')
+                        e_tp = entry_ctx_d.get('tp_trend') or entry_ctx_d.get('tp_first')
+                        atr_stop_hit_d = e_atr_stop and price and price <= float(e_atr_stop)
+                        atr_tp_hit_d = e_tp and price and price >= float(e_tp)
+                        cost_price = pos.get('cost_price', 0) or 0
+
+                        log_ex = []
+                        if e_atr_stop: log_ex.append(f"ATR止损${e_atr_stop}")
+                        if e_tp: log_ex.append(f"ATR止盈${e_tp}")
+                        extra_s = f" ({', '.join(log_ex)})" if log_ex else ''
+                        print(f"[{now}]   {sym}: 盈亏 {pl_pct:+.2f}% 现价${price:.2f}{extra_s}")
 
                         if trader.process_staged_exit(pos, 'us'):
                             continue
 
                         major_negative, negative_reason = trader.has_major_negative_alert(sym)
-                        cost_price = pos.get('cost_price', 0) or 0  # 止盈分支需要
-                        
-                        # 2026-06-23 east 重构：默认直接全平，只有插针场景走分级
-                        if pl_pct < -6 or major_negative:
+
+                        # 止损：ATR动态优先，-6%兜底；重大利空无条件全平
+                        if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             # 重大利空 → 一律全平
                             if major_negative:
                                 close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '')
@@ -2537,10 +2759,20 @@ if __name__ == '__main__':
                                     print(f"[{now}]   ❌ 全平失败: {sym}")
                                 continue
 
-                            # 纯价格止损：判定插针
+                            if atr_stop_hit_d:
+                                close_reason = f'ATR动态止损触发全平(现价${price:.2f}≤${e_atr_stop})'
+                                print(f"[{now}]   ⚠️ ATR动态止损→直接全平! (现价${price:.2f}≤${e_atr_stop}, 浮亏{pl_pct:+.2f}%)")
+                                success = trader.execute_position_sell(pos, int(shares), close_reason, 'atr_stop', 'us')
+                                if success:
+                                    print(f"[{now}]   ✅ 全平完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 全平失败: {sym}")
+                                continue
+
+                            # 纯价格止损（-6%兜底）：判定插针
                             is_flash, flash_reason = trader.is_flash_crash_pattern(sym, 'us')
                             if is_flash:
-                                stage_reason = '插针触发分级减仓'
+                                stage_reason = '插针触发分级减仓(-6%兜底)'
                                 print(f"[{now}]   ⚠️ 插针模式→分级减仓! ({flash_reason}，亏损{pl_pct:+.2f}%)")
                                 success = trader.trigger_stage_one_reduction(pos, stage_reason, 'us')
                                 if success:
@@ -2548,17 +2780,28 @@ if __name__ == '__main__':
                                 else:
                                     print(f"[{now}]   ❌ 分级减仓失败，将继续监控")
                             else:
-                                close_reason = '趋势性下跌触发全平'
+                                close_reason = '趋势性下跌触发全平(-6%兜底)'
                                 print(f"[{now}]   ⚠️ 非插针→直接全平! ({flash_reason}，亏损{pl_pct:+.2f}%)")
                                 success = trader.execute_position_sell(pos, int(shares), close_reason, 'max_loss_stop', 'us')
                                 if success:
                                     print(f"[{now}]   ✅ 全平完成: {sym}")
                                 else:
                                     print(f"[{now}]   ❌ 全平失败: {sym}")
-                        # 止盈：盈利超过8%
-                        elif pl_pct > 8:
-                            print(f"[{now}]   🎯 触发止盈! (盈利{pl_pct:.2f}% > 8%)")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[f'止盈触发：盈利{pl_pct:.2f}% > 8%'], entry_price_override=cost_price)
+                        # 止盈：移动止盈保护利润；ATR 趋势止盈保留。
+                        elif trailing_tp_hit_d:
+                            reason_s = trailing_tp_reason_d
+                            print(f"[{now}]   🎯 触发{reason_s}")
+                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            if success:
+                                print(f"[{now}]   ✅ 止盈完成: {sym}")
+                            else:
+                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
+                                trader.recently_closed[sym] = time.time()
+
+                        elif atr_tp_hit_d:
+                            reason_s = f'ATR动态止盈(现价${price:.2f}≥${e_tp}, 浮盈{pl_pct:+.2f}%)'
+                            print(f"[{now}]   🎯 触发{reason_s}")
+                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
@@ -2584,16 +2827,28 @@ if __name__ == '__main__':
                         market_val = pos.get('market_val', 0)
                         price = market_val / shares if shares > 0 else 0
                         cost_price = pos.get('cost_price', 0) or 0
+                        trader.update_peak_profit(sym, pl_pct)
+                        trailing_tp_hit_d, trailing_tp_reason_d = trader.check_trailing_take_profit(sym, pl_pct)
 
-                        print(f"[{now}]   {sym}: 盈亏 {pl_pct:+.2f}%")
+                        entry_ctx_d = trader._lookup_entry_context(sym) or {}
+                        e_atr_stop = entry_ctx_d.get('atr_stop')
+                        e_tp = entry_ctx_d.get('tp_trend') or entry_ctx_d.get('tp_first')
+                        atr_stop_hit_d = e_atr_stop and price and price <= float(e_atr_stop)
+                        atr_tp_hit_d = e_tp and price and price >= float(e_tp)
+
+                        log_ex = []
+                        if e_atr_stop: log_ex.append(f"ATR止损${e_atr_stop}")
+                        if e_tp: log_ex.append(f"ATR止盈${e_tp}")
+                        extra_s = f" ({', '.join(log_ex)})" if log_ex else ''
+                        print(f"[{now}]   {sym}: 盈亏 {pl_pct:+.2f}% 现价HK${price:.2f}{extra_s}")
 
                         if trader.process_staged_exit(pos, 'hk'):
                             continue
 
                         major_negative, negative_reason = trader.has_major_negative_alert(sym)
 
-                        # 同美股逻辑：默认全平，插针才分级
-                        if pl_pct < -6 or major_negative:
+                        # 同美股：ATR动态优先，-6%兜底
+                        if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             if major_negative:
                                 close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '')
                                 print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
@@ -2604,9 +2859,19 @@ if __name__ == '__main__':
                                     print(f"[{now}]   ❌ 全平失败: {sym}")
                                 continue
 
+                            if atr_stop_hit_d:
+                                close_reason = f'ATR动态止损触发全平(现价HK${price:.2f}≤${e_atr_stop})'
+                                print(f"[{now}]   ⚠️ ATR动态止损→直接全平! (现价HK${price:.2f}≤${e_atr_stop}, 浮亏{pl_pct:+.2f}%)")
+                                success = trader.execute_position_sell(pos, int(shares), close_reason, 'atr_stop', 'hk')
+                                if success:
+                                    print(f"[{now}]   ✅ 全平完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 全平失败: {sym}")
+                                continue
+
                             is_flash, flash_reason = trader.is_flash_crash_pattern(sym, 'hk')
                             if is_flash:
-                                stage_reason = '插针触发分级减仓'
+                                stage_reason = '插针触发分级减仓(-6%兜底)'
                                 print(f"[{now}]   ⚠️ 插针模式→分级减仓! ({flash_reason}，亏损{pl_pct:+.2f}%)")
                                 success = trader.trigger_stage_one_reduction(pos, stage_reason, 'hk')
                                 if success:
@@ -2614,16 +2879,27 @@ if __name__ == '__main__':
                                 else:
                                     print(f"[{now}]   ❌ 分级减仓失败，将继续监控")
                             else:
-                                close_reason = '趋势性下跌触发全平'
+                                close_reason = '趋势性下跌触发全平(-6%兜底)'
                                 print(f"[{now}]   ⚠️ 非插针→直接全平! ({flash_reason}，亏损{pl_pct:+.2f}%)")
                                 success = trader.execute_position_sell(pos, int(shares), close_reason, 'max_loss_stop', 'hk')
                                 if success:
                                     print(f"[{now}]   ✅ 全平完成: {sym}")
                                 else:
                                     print(f"[{now}]   ❌ 全平失败: {sym}")
-                        elif pl_pct > 8:
-                            print(f"[{now}]   🎯 触发止盈! (盈利{pl_pct:.2f}% > 8%)")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'hk', force=True, skip_llm=True, reasons=[f'止盈触发：盈利{pl_pct:.2f}% > 8%'], entry_price_override=cost_price)
+                        elif trailing_tp_hit_d:
+                            reason_s = trailing_tp_reason_d
+                            print(f"[{now}]   🎯 触发{reason_s}")
+                            success = trader.execute_trade(sym, 'SELL', shares, price, 'hk', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            if success:
+                                print(f"[{now}]   ✅ 止盈完成: {sym}")
+                            else:
+                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
+                                trader.recently_closed[sym] = time.time()
+
+                        elif atr_tp_hit_d:
+                            reason_s = f'ATR动态止盈(现价HK${price:.2f}≥${e_tp}, 浮盈{pl_pct:+.2f}%)'
+                            print(f"[{now}]   🎯 触发{reason_s}")
+                            success = trader.execute_trade(sym, 'SELL', shares, price, 'hk', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
@@ -2635,7 +2911,7 @@ if __name__ == '__main__':
                 
                 # 美股交易
                 if us_trading and us_account:
-                    us_high = [o for o in opportunities['us'] if o.get('score', 0) >= trader.us_config.get('min_score', 80)]
+                    us_high = [o for o in opportunities['us'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', 0)) >= trader.us_config.get('min_score', 75)]
                     us_positions = [p.get('symbol') for p in us_account.get('positions', [])]
                     
                     for o in us_high[:1]:
@@ -2647,7 +2923,7 @@ if __name__ == '__main__':
                             continue
                         
                         price = o.get('price', 0)
-                        score = o.get('score', 0)
+                        score = o.get('final_score', o.get('score', 0))
                         order_plan = trader.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
                         if not order_plan.get('can_buy'):
                             print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
@@ -2658,7 +2934,7 @@ if __name__ == '__main__':
                             f"[{now}] 🎯 买入 {symbol} (评分{score}, ${price}, 数量{quantity}, "
                             f"金额${order_plan['order_value']:,.2f}, 总仓位{order_plan['after_total_pct']:.1f}%)"
                         )
-                        success = trader.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', score=score, reasons=o.get('reasons', []))
+                        success = trader.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', skip_llm=True, score=score, reasons=o.get('reasons', []), opp=o)
                         if success:
                             us_positions.append(futu_symbol)
                             us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
@@ -2667,7 +2943,7 @@ if __name__ == '__main__':
                 
                 # 港股交易
                 if hk_trading and hk_account:
-                    hk_high = [o for o in opportunities['hk'] if o.get('base_score', 0) >= trader.hk_config.get('min_score', 70)]
+                    hk_high = [o for o in opportunities['hk'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', o.get('base_score', 0))) >= trader.hk_config.get('min_score', 75)]
                     hk_positions = [p.get('symbol') for p in hk_account.get('positions', [])]
                     
                     print(f"[{now}] 🇭🇰 港股高评分: {len(hk_high)}只, 持仓: {len(hk_positions)}只")
@@ -2681,7 +2957,7 @@ if __name__ == '__main__':
                             continue
                         
                         price = o.get('price', 0)
-                        score = o.get('base_score', 0)
+                        score = o.get('final_score', o.get('score', o.get('base_score', 0)))
                         
                         print(f"[{now}] 💰 {symbol} 价格: {price}, 评分: {score}")
                         
@@ -2698,7 +2974,7 @@ if __name__ == '__main__':
                             f"-> {quantity}股(每手{lot_size})"
                         )
                         print(f"[{now}] 🎯 买入 {symbol} (评分{score}, 价格{price}, 数量{quantity})")
-                        success = trader.execute_trade(symbol, 'BUY', quantity, price, 'hk', score=score, reasons=o.get('reasons', []))
+                        success = trader.execute_trade(symbol, 'BUY', quantity, price, 'hk', skip_llm=True, score=score, reasons=o.get('reasons', []), opp=o)
                         if success:
                             hk_positions.append(symbol)
                             hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})

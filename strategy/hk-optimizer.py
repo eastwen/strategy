@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 港股策略自我优化系统 v2.0
 深度分析：市场情绪、信号质量、策略参数
@@ -8,17 +8,19 @@ import sys
 import json
 import os
 import requests
+
+from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_DIR, config_path, load_api_keys
 from datetime import datetime
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+sys.path.insert(0, str(STRATEGY_DIR))
 
 class HKOptimizer:
     """港股策略自我优化系统 v2.0"""
     
     def __init__(self):
-        self.data_dir = '/home/admin/.openclaw/workspace-stock/data'
-        self.reports_dir = '/home/admin/.openclaw/workspace-stock/daily-reports'
-        self.config_dir = '/home/admin/.openclaw/workspace-stock/config'
+        self.data_dir = str(DATA_DIR)
+        self.reports_dir = str(REPORTS_DIR)
+        self.config_dir = str(config_path())
         
     def get_data(self):
         """获取所需数据"""
@@ -252,17 +254,14 @@ class HKOptimizer:
         print("="*60)
         return proposals
 
-def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
+def send_to_feishu_chat(message, chat_id=None):
     """发送消息到飞书群聊"""
     # 从.api-keys.json读取凭据
-    try:
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            keys = json.load(f)
-        app_id = keys['feishu']['appId']
-        app_secret = keys['feishu']['appSecret']
-    except:
-        app_id = "cli_a93b169884f8dcc1"
-        app_secret = "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+    keys = load_api_keys()
+    feishu = keys.get('feishu', {})
+    app_id = feishu.get('appId', '')
+    app_secret = feishu.get('appSecret', '')
+    chat_id = chat_id or feishu.get('chatId', '')
     
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     token_data = {

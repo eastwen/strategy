@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 每日日报生成脚本
 1. 生成完整日报（使用ComprehensiveReportV11类）
@@ -14,15 +14,18 @@ import requests
 from datetime import datetime
 
 # 添加futu路径
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import (
+    API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, LOG_DIR, NEWS_DB_PATH,
+    PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR,
+)
 from futu import OpenQuoteContext, OpenSecTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
 
 # 常量
 WIKI_SPACE = "7618972433919445958"
-DATA_FILE = "/home/admin/.openclaw/workspace-stock/data/trades.json"
-MD_FILE = "/home/admin/.openclaw/workspace-stock/daily-reports/{}-report.md"
-API_KEYS_FILE = "/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json"
-LOG_FILE = "/home/admin/.openclaw/workspace-stock/logs/hk-daily.log"
+DATA_FILE = str(DATA_DIR / 'trades.json')
+MD_FILE = str(REPORTS_DIR / '{}-report.md')
+API_KEYS_FILE = str(API_KEYS_PATH)
+LOG_FILE = str(LOG_DIR / 'hk-daily.log')
 
 def run_cmd(cmd):
     """执行命令并返回输出"""
@@ -46,7 +49,7 @@ def load_api_keys():
 
 class ComprehensiveReportV11:
     """综合日报生成器"""
-    
+
     HK_NAME_MAP = {
         'HK.00001': '长江基建', 'HK.00002': '中电控股', 'HK.00003': '香港中华煤气',
         'HK.00005': '汇丰控股', 'HK.00006': '电能实业', 'HK.00011': '恒生银行',
@@ -76,17 +79,17 @@ class ComprehensiveReportV11:
         'HK.09888': '百度', 'HK.09939': '名创优品', 'HK.09961': '携程集团',
         'HK.09988': '阿里巴巴', 'HK.08006': '汇通达', 'HK.08035': '英皇证券',
     }
-    
+
     def __init__(self, us_mode=False, report_date_str=None):
         self.us_mode = us_mode
         # 2026-06-19 east：美股模式下报告日期是「北京今天 -1」（美股交易日），其他模式默认今天
         self.report_date_str = report_date_str or datetime.now().strftime("%Y-%m-%d")
-    
+
     @property
     def llm(self):
         """惰性加载LLM客户端"""
         if not hasattr(self, '_llm_client') or self._llm_client is None:
-            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            sys.path.insert(0, str(STRATEGY_DIR))
             from llm_stock_analyzer import get_llm_client
             self._llm_client = get_llm_client()
         return self._llm_client
@@ -94,10 +97,10 @@ class ComprehensiveReportV11:
     def get_today_trades(self, market='us'):
         """获取当天的开仓/平仓记录"""
         from datetime import datetime, timedelta
-        
+
         today = datetime.now()
         today_str = today.strftime('%Y-%m-%d')
-        
+
         def is_today(timestamp):
             """检查时间戳是否是今天（支持多种格式）"""
             if not timestamp:
@@ -114,11 +117,11 @@ class ComprehensiveReportV11:
             except:
                 # 最后回退到startswith
                 return timestamp.startswith(today_str)
-        
+
         # 读取开仓记录
         open_positions = []
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/open-positions.json', 'r') as f:
+            with open(str(DATA_DIR / 'open-positions.json'), 'r') as f:
                 all_positions = json.load(f)
                 # 筛选当天的开仓
                 for pos in all_positions:
@@ -130,11 +133,11 @@ class ComprehensiveReportV11:
                             open_positions.append(pos)
         except:
             pass
-        
+
         # 读取平仓记录
         closed_trades = []
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/closed-trades.json', 'r') as f:
+            with open(str(DATA_DIR / 'closed-trades.json'), 'r') as f:
                 all_trades = json.load(f)
                 # 筛选当天的平仓
                 for trade in all_trades:
@@ -146,28 +149,28 @@ class ComprehensiveReportV11:
                             closed_trades.append(trade)
         except:
             pass
-        
+
         return {
             'open_positions': open_positions,
             'closed_trades': closed_trades
         }
-    
+
     def get_closed_trades(self, days=7):
         """获取近N天的平仓交易记录"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/closed-trades.json', 'r') as f:
+            with open(str(DATA_DIR / 'closed-trades.json'), 'r') as f:
                 trades = json.load(f)
-            
+
             from datetime import datetime, timedelta
             cutoff = (datetime.now() - timedelta(days=days)).isoformat()
             recent = [t for t in trades if t.get('close_time', '') >= cutoff]
             return recent
         except:
             return []
-    
+
     def get_strategy_pnl_stats(self, market='us'):
         """获取策略持仓收益统计
-        
+
         统计当前持仓的盈亏情况，按策略版本分组
         """
         # 筛选持仓
@@ -178,22 +181,22 @@ class ComprehensiveReportV11:
             s = str(sym).replace('HK.', '').replace('US.', '')
             return not s.isdigit() and not s.startswith('0') and not s.startswith('0')
         if market == 'hk':
-            positions = [p for poss in self.positions_by_account.values() 
+            positions = [p for poss in self.positions_by_account.values()
                         for p in poss if is_hk_symbol(p.get('symbol', ''))]
         else:
-            positions = [p for poss in self.positions_by_account.values() 
+            positions = [p for poss in self.positions_by_account.values()
                         for p in poss if is_us_symbol(p.get('symbol', ''))]
-        
+
         if not positions:
             return None
-        
+
         # 统计
         wins = [p for p in positions if p.get('pnl_pct', 0) > 0]
         losses = [p for p in positions if p.get('pnl_pct', 0) <= 0]
         total_pnl = sum(p.get('market_val', 0) * p.get('pnl_pct', 0) / 100 for p in positions)
         avg_pnl_pct = sum(p.get('pnl_pct', 0) for p in positions) / len(positions) if positions else 0
         total_market_val = sum(p.get('market_val', 0) for p in positions)
-        
+
         return {
             'total': len(positions),
             'wins': len(wins),
@@ -204,7 +207,7 @@ class ComprehensiveReportV11:
             'total_market_val': total_market_val,
             'positions': positions
         }
-    
+
     def get_closed_trades_stats(self, market=None, days=7):
         """获取平仓交易统计（保留兼容）"""
         trades = self.get_closed_trades(days)
@@ -212,20 +215,20 @@ class ComprehensiveReportV11:
             trades = [t for t in trades if t.get('market') == market]
         if not trades:
             return None
-        
+
         wins = [t for t in trades if t.get('pnl_pct', 0) > 0]
         losses = [t for t in trades if t.get('pnl_pct', 0) < 0]
         total_pnl = sum(t.get('pnl', 0) for t in trades)
         avg_win = sum(t.get('pnl_pct', 0) for t in wins) / len(wins) if wins else 0
         avg_loss = sum(t.get('pnl_pct', 0) for t in losses) / len(losses) if losses else 0
-        
+
         entry_wins = [t for t in trades if t.get('peak_pnl_pct', 0) > 0]
         stop_losses = [t for t in trades if t.get('stop_type') in ('atr_stop_loss', 'max_loss_stop')]
         take_profits = [t for t in trades if t.get('stop_type') == 'take_profit']
-        
+
         avg_loss_abs = abs(avg_loss) if avg_loss != 0 else 0
         profit_loss_ratio = avg_win / avg_loss_abs if avg_loss_abs > 0 else 0
-        
+
         return {
             'total': len(trades),
             'wins': len(wins),
@@ -240,17 +243,17 @@ class ComprehensiveReportV11:
             'take_profit_rate': len(take_profits) / len(trades) * 100 if trades else 0,
             'trades': trades
         }
-        
+
         self.accounts_data = {}
         self.positions_by_account = {}
         self.sentiment = {}
-        
+
         # 飞书
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
         self.feishu_open_id = keys['feishu'].get('openId', '')
         self.feishu_token = None
-    
+
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
         res = requests.post(url, json={"app_id": self.feishu_app_id, "app_secret": self.feishu_app_secret})
@@ -258,23 +261,23 @@ class ComprehensiveReportV11:
             self.feishu_token = res.json().get('tenant_access_token')
             return True
         return False
-    
+
     def fetch_data(self, force_sync=False):
         """获取数据"""
         print("📊 获取数据...")
-        
+
         # 加载富途账户数据
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
-            
+
             if data.get('source') == 'futu_simulate' and 'accounts' in data:
                 accounts = data.get('accounts', [])
                 positions_raw = data.get('positions', [])
-                
+
                 self.accounts_data = {}
                 self.positions_by_account = {}
-                
+
                 for acc in accounts:
                     acc_id = acc.get('acc_id')
                     market_val = acc.get('market_val', 0)
@@ -283,7 +286,7 @@ class ComprehensiveReportV11:
                     initial = 1000000
                     total_pnl = total_asset - initial
                     total_pnl_pct = total_pnl / initial * 100 if initial > 0 else 0
-                    
+
                     self.accounts_data[acc_id] = {
                         'initial': initial,
                         'total_asset': total_asset,
@@ -293,39 +296,39 @@ class ComprehensiveReportV11:
                         'total_pnl_pct': total_pnl_pct
                     }
                     self.positions_by_account[acc_id] = []
-                
+
                 for pos in positions_raw:
                     acc_id = pos.get('acc_id')
                     if acc_id not in self.positions_by_account:
                         self.positions_by_account[acc_id] = []
-                    
+
                     symbol = pos['symbol'].replace('US.', '').replace('HK.', '')
                     shares = pos['shares']
                     cost = pos['cost_price']
                     market_val = pos.get('market_val', 0)
                     pl_ratio = pos.get('pl_ratio', 0)
                     price = market_val / shares if shares > 0 else cost
-                    
+
                     self.positions_by_account[acc_id].append({
                         'symbol': symbol,
                         'shares': shares,
                         'cost': cost,
                         'price': price,
-                        'pnl_pct': pl_ratio * 100,  # 小数转换为百分比，和交易系统单位统一
+                        'pnl_pct': pl_ratio,  # trades.json 与富途统一为百分比数值
                         'market_val': market_val
                     })
-                
+
                 # 兼容：所有持仓放一起
                 self.positions = []
                 for poss in self.positions_by_account.values():
                     self.positions.extend(poss)
-                
+
                 display_acc = accounts[0] if accounts else {'acc_id': 15270898}
                 self.account_data = self.accounts_data.get(display_acc.get('acc_id'), self.accounts_data.get(15270898))
-                
+
                 total_pos_count = sum(len(p) for p in self.positions_by_account.values())
                 print(f"✅ 获取持仓数据: {total_pos_count}只")
-        
+
         # 获取VHSI
         self.hk_vhsi = self.get_vhsi_data()
         # 获取VIX
@@ -335,24 +338,32 @@ class ComprehensiveReportV11:
         self.hk_sentiment_full = None
         self.us_sentiment_full = None
         try:
-            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+            sys.path.insert(0, str(STRATEGY_DIR))
             from hk_market_sentiment import HKMarketSentiment
             self.hk_sentiment_full = HKMarketSentiment().get_market_sentiment()
+            if self.hk_sentiment_full is None:
+                print("⚠️ 获取港股完整情绪失败: HKMarketSentiment.get_market_sentiment() 返回 None（很可能是 Futu OpenD 未连接或各子数据源全部失败）")
         except Exception as e:
-            print(f"⚠️ 获取港股完整情绪失败: {e}")
+            import traceback
+            print(f"⚠️ 获取港股完整情绪异常: {e}")
+            traceback.print_exc()
         try:
             from us_market_sentiment import USMarketSentiment
             self.us_sentiment_full = USMarketSentiment().get_market_sentiment()
+            if self.us_sentiment_full is None:
+                print("⚠️ 获取美股完整情绪失败: USMarketSentiment.get_market_sentiment() 返回 None（各子数据源可能全部失败）")
         except Exception as e:
-            print(f"⚠️ 获取美股完整情绪失败: {e}")
+            import traceback
+            print(f"⚠️ 获取美股完整情绪异常: {e}")
+            traceback.print_exc()
 
         print(f"✅ VHSI={self.hk_vhsi:.1f}, VIX={self.us_vix:.1f}")
         if self.hk_sentiment_full:
             print(f"✅ 港股综合情绪分: {self.hk_sentiment_full.get('sentiment_score')}/100")
         if self.us_sentiment_full:
             print(f"✅ 美股综合情绪分: {self.us_sentiment_full.get('sentiment_score')}/100 ({self.us_sentiment_full.get('sentiment_label')})")
-    
-    def enrich_positions_for_llm(self, positions, news_db_path='/home/admin/.openclaw/workspace-stock/data/news/news.db'):
+
+    def enrich_positions_for_llm(self, positions, news_db_path=str(NEWS_DB_PATH)):
         """为 LLM 风险/操作建议丰富持仓数据
 
         附加字段：
@@ -369,7 +380,7 @@ class ComprehensiveReportV11:
         # 1. 读 open-positions.json 补充 entry_price / entry_time
         open_pos_map = {}
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/open-positions.json', 'r') as f:
+            with open(str(DATA_DIR / 'open-positions.json'), 'r') as f:
                 for op in json.load(f):
                     raw = (op.get('symbol') or '').replace('US.', '').replace('HK.', '')
                     open_pos_map[raw] = op
@@ -380,7 +391,7 @@ class ComprehensiveReportV11:
         tech_map = {}
         for opp_file in ('us-opportunities.json', 'hk-opportunities.json'):
             try:
-                with open(f'/home/admin/.openclaw/workspace-stock/data/{opp_file}', 'r') as f:
+                with (DATA_DIR / opp_file).open('r', encoding='utf-8') as f:
                     payload = json.load(f)
                     items = payload.get('opportunities', payload) if isinstance(payload, dict) else payload
                     for x in items:
@@ -468,36 +479,36 @@ class ComprehensiveReportV11:
 
     def get_position_news(self, symbols, limit=2):
         """获取持仓相关新闻
-        
+
         Args:
             symbols: 持仓股票代码列表
             limit: 每只股票获取的新闻数量
         """
         import sqlite3
         from datetime import datetime, timedelta
-        
+
         news_by_symbol = {}
-        db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
-        
+        db_path = str(NEWS_DB_PATH)
+
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
+
             # 获取最近3天的新闻
             three_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-            
+
             for symbol in symbols:
                 # 清理股票代码（去掉US./HK.前缀）
                 clean_symbol = symbol.replace('US.', '').replace('HK.', '')
-                
+
                 cursor.execute('''
-                    SELECT title, sentiment, timestamp, url 
-                    FROM news 
+                    SELECT title, sentiment, timestamp, url
+                    FROM news
                     WHERE symbol = ? AND timestamp >= ?
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC
                     LIMIT ?
                 ''', (clean_symbol, three_days_ago, limit))
-                
+
                 rows = cursor.fetchall()
                 if rows:
                     news_by_symbol[symbol] = [
@@ -509,16 +520,16 @@ class ComprehensiveReportV11:
                         }
                         for row in rows
                     ]
-            
+
             conn.close()
         except Exception as e:
             print(f"⚠️ 获取新闻失败: {e}")
-        
+
         return news_by_symbol
 
     def get_market_news(self, limit=10):
         """获取市场重要新闻（优先中文来源，按情绪极端程度排序）
-        
+
         优先显示情绪极端的新闻（正面>0.7或负面<0.3）
         优先中文来源：新浪财经、东方财富、港交所、观察者网
         过滤乱码新闻
@@ -526,61 +537,61 @@ class ComprehensiveReportV11:
         import sqlite3
         import re
         from datetime import datetime, timedelta
-        
+
         news_list = []
-        db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
-        
+        db_path = str(NEWS_DB_PATH)
+
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
-            
+
             # 获取最近3天的新闻
             three_days_ago = (datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')
-            
+
             # 获取所有新闻，按来源和时间排序
             cursor.execute('''
-                SELECT title, source, sentiment, timestamp 
-                FROM news 
+                SELECT title, source, sentiment, timestamp
+                FROM news
                 WHERE timestamp >= ?
                 ORDER BY timestamp DESC
                 LIMIT 100
             ''', (three_days_ago,))
-            
+
             rows = cursor.fetchall()
-            
+
             # 过滤乱码新闻，确保来源多样化
             sources_count = {}
             for row in rows:
                 title = row[0]
                 source = row[1]
-                
+
                 # 检查是否是乱码（包含非正常字符）
                 if re.search(r'[äëïöüàèìòù]', title):
                     continue
-                
+
                 # 每个来源最多2条
                 if source not in sources_count:
                     sources_count[source] = 0
-                
+
                 if sources_count[source] >= 2:
                     continue
-                
+
                 sources_count[source] += 1
-                
+
                 news_list.append({
                     'title': title,
                     'source': source,
                     'sentiment': row[2],
                     'timestamp': row[3][:10]
                 })
-                
+
                 if len(news_list) >= limit:
                     break
-            
+
             conn.close()
         except Exception as e:
             print(f"⚠️ 获取市场新闻失败: {e}")
-        
+
         return news_list
 
     def get_earnings_calendar(self, days=7):
@@ -588,21 +599,21 @@ class ComprehensiveReportV11:
         try:
             import requests
             from datetime import datetime, timedelta
-            
+
             # 从配置文件获取Finnhub API Key
             api_keys = load_api_keys()
             api_key = api_keys.get('finnhub', {}).get('api_key', 'd1t843pr01qr2iisvusgd1t843pr01qr2iisvut0')
-            
+
             from_date = datetime.now().strftime('%Y-%m-%d')
             to_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
-            
+
             url = f"https://finnhub.io/api/v1/calendar/earnings?from={from_date}&to={to_date}&token={api_key}"
-            
+
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 earnings = data.get('earningsCalendar', [])
-                
+
                 result = []
                 for e in earnings[:10]:  # 最多10家
                     result.append({
@@ -613,17 +624,17 @@ class ComprehensiveReportV11:
                         'revenue_est': e.get('revenueEstimate', 'N/A'),
                         'eps_actual': e.get('epsActual', 'N/A'),
                     })
-                
+
                 return result
         except Exception as e:
             print(f"⚠️ 获取财报日历失败: {e}")
-        
+
         return []
 
     def get_vhsi_data(self):
         """获取港股VHSI波幅指数"""
         try:
-            ctx = OpenQuoteContext('127.0.0.1', 11111)
+            ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             ret, data = ctx.get_market_snapshot(['HK.800125'])
             ctx.close()
             if ret == RET_OK and len(data) > 0:
@@ -632,34 +643,46 @@ class ComprehensiveReportV11:
         except Exception as e:
             print(f"⚠️ 获取VHSI失败: {e}")
         return 25.0
-    
+
     def get_vix_data(self):
-        """获取美股VIX恐慌指数 - 使用Yahoo Finance"""
-        try:
-            import requests
-            # Yahoo Finance VIX数据
-            url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            resp = requests.get(url, headers=headers, timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
-                result = data.get('chart', {}).get('result', [])
-                if result:
-                    meta = result[0].get('meta', {})
-                    price = meta.get('regularMarketPrice', 20)
-                    if price and price > 0:
-                        return float(price)
-        except Exception as e:
-            print(f"⚠️ 获取VIX失败: {e}")
+        """获取美股VIX恐慌指数 - 多源备用"""
+        import requests
+
+        # 多个备用API端点
+        urls = [
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            "https://query2.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            "https://query1.finance.yahoo.com/v7/finance/chart/%5EVIX",
+        ]
+
+        headers = {'User-Agent': 'Mozilla/5.0'}
+
+        for url in urls:
+            try:
+                resp = requests.get(url, headers=headers, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result = data.get('chart', {}).get('result', [])
+                    if result:
+                        meta = result[0].get('meta', {})
+                        price = meta.get('regularMarketPrice', 0)
+                        if price and price > 0:
+                            print(f"✅ VIX获取成功: {price:.2f}")
+                            return float(price)
+            except Exception as e:
+                print(f"⚠️ VIX API {url} 失败: {e}")
+                continue
+
+        print("⚠️ 所有VIX API失败，使用默认值20.0")
         return 20.0
-    
+
     def fetch_hk_index_data(self):
         """获取港股指数数据 - 优先使用Futu API，备用Yahoo Finance"""
         data = {}
-        
+
         # 方式1: 尝试Futu API
         try:
-            ctx = OpenQuoteContext('127.0.0.1', 11111)
+            ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             indices = {
                 'HK.800000': '恒生指数',
                 'HK.800100': '国企指数',
@@ -668,63 +691,63 @@ class ComprehensiveReportV11:
             codes = list(indices.keys())
             ret, snapshot = ctx.get_market_snapshot(codes)
             ctx.close()
-            
+
             if ret == RET_OK:
                 for _, row in snapshot.iterrows():
                     code = row['code']
                     name = indices.get(code, code)
                     price = row.get('last_price', 0)
                     prev_close = row.get('prev_close_price', 0)
-                    
+
                     if price and prev_close:
                         change = price - prev_close
                         change_pct = (change / prev_close) * 100
-                        
+
                         data[name] = {
                             'price': price,
                             'change': change,
                             'change_pct': change_pct
                         }
                         print(f"  ✅ {name}: {price:.2f} ({change_pct:+.2f}%)")
-                
+
                 if len(data) >= 2:
                     return data
         except Exception as e:
             print(f"⚠️ Futu获取港股指数失败: {e}")
-        
+
         # 方式2: 备用Yahoo Finance
         try:
             import requests
-            
+
             indices_yahoo = {
                 '^HSI': '恒生指数',
                 '^HSCE': '国企指数',
                 '^HSTECH': '恒生科技'
             }
-            
+
             headers = {'User-Agent': 'Mozilla/5.0'}
-            
+
             for symbol, name in indices_yahoo.items():
                 if name in data:  # 已经获取到了
                     continue
-                    
+
                 try:
                     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d"
                     resp = requests.get(url, headers=headers, timeout=5)
-                    
+
                     if resp.status_code == 200:
                         result = resp.json()
                         chart = result.get('chart', {}).get('result', [])
-                        
+
                         if chart:
                             meta = chart[0].get('meta', {})
                             price = meta.get('regularMarketPrice', 0)
                             prev_close = meta.get('chartPreviousClose', 0)
-                            
+
                             if price and prev_close:
                                 change = price - prev_close
                                 change_pct = (change / prev_close) * 100
-                                
+
                                 data[name] = {
                                     'price': price,
                                     'change': change,
@@ -736,7 +759,7 @@ class ComprehensiveReportV11:
                     continue
         except Exception as e:
             print(f"⚠️ Yahoo获取港股指数失败: {e}")
-        
+
         # 如果恒生科技指数没有数据，添加占位
         if '恒生科技' not in data:
             data['恒生科技'] = {
@@ -745,42 +768,42 @@ class ComprehensiveReportV11:
                 'change_pct': 0
             }
             print(f"  ⏸️ 恒生科技: 暂无数据")
-        
+
         return data
-    
+
     def fetch_us_index_data(self):
         """获取美股指数数据 - 使用Yahoo Finance"""
         data = {}
         try:
             import requests
-            
+
             # Yahoo Finance指数代码
             indices = {
                 '^GSPC': '标普500',
                 '^NDX': '纳斯达克100',
                 '^DJI': '道琼斯'
             }
-            
+
             headers = {'User-Agent': 'Mozilla/5.0'}
-            
+
             for symbol, name in indices.items():
                 try:
                     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d"
                     resp = requests.get(url, headers=headers, timeout=5)
-                    
+
                     if resp.status_code == 200:
                         result = resp.json()
                         chart = result.get('chart', {}).get('result', [])
-                        
+
                         if chart:
                             meta = chart[0].get('meta', {})
                             price = meta.get('regularMarketPrice', 0)
                             prev_close = meta.get('chartPreviousClose', 0)
-                            
+
                             if price and prev_close:
                                 change = price - prev_close
                                 change_pct = (change / prev_close) * 100
-                                
+
                                 data[name] = {
                                     'price': price,
                                     'change': change,
@@ -795,15 +818,15 @@ class ComprehensiveReportV11:
                     continue
         except Exception as e:
             print(f"⚠️ 获取美股指数失败: {e}")
-        
+
         return data
-    
+
     def build_markdown_report(self):
         """构建Markdown日报"""
         title = "🇭🇰🇺🇸 港股美股日报"
         # 2026-06-19 east：使用 report_date_str（美股模式 = 美股交易日）保证标题与文件名一致
         date_str = self.report_date_str
-        
+
         acc_names = {15270898: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
         symbol_names = {
             'NVDA': '英伟达', 'AAPL': '苹果', 'TSLA': '特斯拉',
@@ -817,18 +840,18 @@ class ComprehensiveReportV11:
             'HK.00027': '银河娱乐', 'HK.00101': '恒隆地产', 'HK.00175': '吉利汽车',
             'HK.00241': '中信股份', 'HK.00285': '贝壳',
         }
-        
+
         # 计算汇总数据
         total_asset = sum(ad['total_asset'] for ad in self.accounts_data.values())
         total_pos = sum(ad['position_value'] for ad in self.accounts_data.values())
         total_cash = sum(ad['cash'] for ad in self.accounts_data.values())
         all_positions = [p for poss in self.positions_by_account.values() for p in poss]
         total_pnl = sum(p['shares'] * (p['price'] - p['cost']) for p in all_positions)
-        
+
         pos_pct = total_pos / total_asset * 100 if total_asset > 0 else 0
         cash_pct = total_cash / total_asset * 100 if total_asset > 0 else 0
         initial_pct = (total_asset - 2000000) / 2000000 * 100
-        
+
         report = f"""# {title} {date_str}
 
 ---
@@ -836,7 +859,7 @@ class ComprehensiveReportV11:
 ## 📊 一、账户核心数据
 
 """
-        
+
         for acc_id, ad in self.accounts_data.items():
             market = acc_names.get(acc_id, f'账户{acc_id}')
             positions = self.positions_by_account.get(acc_id, [])
@@ -847,7 +870,7 @@ class ComprehensiveReportV11:
             else:
                 pos_pct_a = cash_pct_a = initial_pct_a = 0
             total_pnl_a = sum(p['shares'] * (p['price'] - p['cost']) for p in positions)
-            
+
             report += f"### {market}账户 ({acc_id})\n\n"
             report += f"| 指标 | 数值 | 备注 |\n|------|------|------|\n"
             report += f"| 初始资金 | $1,000,000.00 | 模拟盘初始本金 |\n"
@@ -857,11 +880,11 @@ class ComprehensiveReportV11:
             report += f"| 可用资金 | ${ad['cash']:,.2f} | 占总资产{cash_pct_a:.2f}% |\n"
             pl_txt = '盈利' if total_pnl_a >= 0 else '亏损'
             report += f"| 浮动盈亏 | ${total_pnl_a:+,.2f} | {pl_txt} |\n\n"
-        
+
         # 加载交易系统的持仓目标价数据（同源）
         position_targets = {}
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/open-positions.json', 'r') as f:
+            with open(str(DATA_DIR / 'open-positions.json'), 'r') as f:
                 positions = json.load(f)
             for p in positions:
                 position_targets[p['symbol']] = {
@@ -870,7 +893,7 @@ class ComprehensiveReportV11:
                 }
         except:
             pass
-        
+
         if all_positions:
             report += "## 📦 二、当前持仓明细\n\n"
             report += "| 标的代码 | 标的名称 | 持仓数量 | 平均成本 | 当前市值 | 浮动盈亏 | 盈亏比例 | 止损价 | 目标止盈价 |\n"
@@ -886,13 +909,13 @@ class ComprehensiveReportV11:
                 take_profit = target_info.get('target_take_profit', round(pos['cost'] * 1.08, 2))
                 report += f"| {sym} | {name} | {pos['shares']}股 | ${pos['cost']:.2f} | ${mv:,.2f} | ${pnl:+,.2f} | {pos['pnl_pct']:+.2f}% | ${stop_loss:.2f} | ${take_profit:.2f} |\n"
             report += "\n"
-        
+
         # 策略持仓收益统计
         hk_stats = self.get_strategy_pnl_stats(market='hk')
         us_stats = self.get_strategy_pnl_stats(market='us')
-        
+
         report += "## 📋 三、本日策略收益\n\n"
-        
+
         # 港股统计
         report += "### 🇭🇰 港股策略 v2.1\n\n"
         if hk_stats and hk_stats['total'] > 0:
@@ -906,7 +929,7 @@ class ComprehensiveReportV11:
             report += f"| 平均浮盈 | {hk_stats['avg_pnl_pct']:+.2f}% |\n"
         else:
             report += "暂无持仓\n\n"
-        
+
         # 美股统计
         report += "### 🇺🇸 美股策略 v1.7\n\n"
         if us_stats and us_stats['total'] > 0:
@@ -922,44 +945,47 @@ class ComprehensiveReportV11:
         else:
             report += "暂无持仓\n\n"
         report += "\n"
-        
+
         report += """## 🎯 四、当前策略说明
 
-### 🇭🇰 港股策略（v2.1 新闻增强版）
+### 🇭🇰 港股策略（v2.2 新闻增强版）
 
 **核心规则**
-- 四源共振：国际资讯(30%)、港股公告(20%)、国内社区(25%)、海外社交(25%)
-- 新闻情绪：市场整体情绪(0.52)，正面+15分，负面-10分
+- 五源共振：国际资讯(25%)、港股公告(20%)、国内社区(25%)、机构/海外社交(20%)、资金异动(10%)
+- 新闻情绪：市场整体情绪驱动，正面加分、负面减分（五源真实评分，零硬拆）
 - 情绪监控：VHSI恒指波幅、港股通资金流向、牛熊证比例
-- 开仓规则：评分≥70分，均线金叉，成交量≥1.5倍，RSI 20-80，仓位2-5%
-- 止损规则：单票浮亏≥6%强制止损
-- 止盈规则：收益≥15%分批止盈
+- 开仓规则：综合评分≥80分，MA20上升趋势且价格>MA20，成交量≥1.5倍，RSI 35-70，单票仓位3%
+- 止损规则：ATR动态止损（1.5倍），浮亏≥6%强制止损
+- 止盈规则：ATR动态止盈（3.0倍），RSI>70超买离场，最大持仓10天
 
-### 🇺🇸 美股策略（v1.7 LLM增强版）
+### 🇺🇸 美股策略（v1.8 LLM增强版）
 
 **核心规则**
-- 四源共振：国际资讯(35%)、监管公告(20%)、国内社区(25%)、海外社交(20%)
+- 五源共振：国际资讯(25%)、监管公告(20%)、社区情绪(25%)、机构观点(20%)、资金异动(10%)
 - LLM分析：基础评分≥70触发，最终评分≥65才入场
 - 严格择时：MA20>MA50，价格>MA20，技术信号≥2，成交量≥1.8倍，RSI<65
-- 开仓规则：评分≥70分，单票仓位12%，总仓位≤40%
-- 止损规则：ATR动态止损（1.8-2.0倍），浮亏≥6%强制止损
+- 开仓规则：综合评分≥80分，单票仓位8-12%（按评分/VIX动态调整），总仓位随VIX收紧（VIX>30时≤50%）
+- 止损规则：ATR动态止损（1.8-2.0倍），浮亏≥6%强制止损，跌破1.2倍ATR收紧止损线全平
 - 止盈规则：ATR动态止盈（4.0-4.5倍），收益≥15%分批止盈，最大持仓6天
 
 **版本变更记录**
 
 | 版本号 | 市场 | 更新时间 | 变更内容 |
 |--------|------|----------|----------|
+| v2.2 | 港股 | 2026-07-09 | 评分门槛提升至80，RSI区间收窄至35-70，ATR动态止损(1.5x)/止盈(3.0x) |
+| v1.8 | 美股 | 2026-07-09 | 评分门槛提升至80，VIX动态仓位收紧，1.2x ATR收紧止损线 |
 | v2.1 | 港股 | 2026-04-02 | 新闻情绪注入，动态行业权重 |
 | v1.7 | 美股 | 2026-04-02 | LLM增强分析，严格择时 |
+| v1.4 | 五源评分 | 2026-07-02 | 五源真实评分替代硬拆base_score，全数据源接入备用源 |
 | v1.0 | 港股/美股 | 2026-03-22 | 初始版本上线 |
 
 """
-        
+
         report += "## 🔍 五、当日交易记录\n\n"
-        
+
         # 获取今日交易记录
         today_trades = self.get_today_trades(market='us' if self.us_mode else 'hk')
-        
+
         # 显示开仓记录
         if today_trades['open_positions']:
             report += "### 📈 开仓记录\n\n"
@@ -970,7 +996,7 @@ class ComprehensiveReportV11:
                 time = pos.get('entry_time', '')[:16]
                 score = pos.get('entry_score', 0)
                 reasons = pos.get('entry_reasons', [])
-                
+
                 report += f"**{sym}** | {shares}股 @ ${price:.2f} | {time}\n\n"
                 if score > 0:
                     report += f"- 📊 评分: {score}分\n"
@@ -981,7 +1007,7 @@ class ComprehensiveReportV11:
                 report += "\n"
         else:
             report += "### 📈 开仓记录\n\n今日无开仓操作\n\n"
-        
+
         # 显示平仓记录
         if today_trades['closed_trades']:
             report += "### 💰 平仓记录\n\n"
@@ -998,10 +1024,10 @@ class ComprehensiveReportV11:
                 pnl_pct = trade.get('pnl_pct', 0)
                 peak_pnl = trade.get('peak_pnl_pct', 0)
                 hold_days = trade.get('hold_days', 0)
-                
+
                 pnl_icon = "✅" if pnl_pct > 0 else "❌"
                 pnl_str = f"{pnl_pct:+.2f}%"
-                
+
                 report += f"**{sym}** | {shares}股 | {time}\n\n"
                 report += f"- 💵 开仓价: ${entry_price:.2f} → 平仓价: ${exit_price:.2f}\n"
                 report += f"- {pnl_icon} 盈亏: {pnl_str}"
@@ -1023,26 +1049,26 @@ class ComprehensiveReportV11:
                 report += "\n"
         else:
             report += "### 💰 平仓记录\n\n今日无平仓操作\n\n"
-        
+
         report += "---\n\n"
-        
+
         hk_index_data = self.fetch_hk_index_data()
         us_index_data = self.fetch_us_index_data()
-        
+
         def safe_float(val):
             try:
                 f = float(val)
                 return f if str(val) not in ('N/A', '', None, 'None') else 0.0
             except:
                 return 0.0
-        
+
         # 获取持仓相关新闻
         position_symbols = [pos['symbol'] for pos in all_positions]
         position_news = self.get_position_news(position_symbols, limit=3)
-        
+
         # 获取市场重要新闻（按情绪排序，优先显示极端情绪）
         market_news = self.get_market_news(limit=5)
-        
+
         report += """## 📰 六、当日核心新闻与市场分析
 
 ### 📈 持仓标的相关新闻
@@ -1053,7 +1079,7 @@ class ComprehensiveReportV11:
                 sym = pos['symbol']
                 name = symbol_names.get(sym, sym)
                 news_list = position_news.get(sym, [])
-                
+
                 if news_list:
                     has_news = True
                     report += f"\n**{sym} ({name})**\n\n"
@@ -1061,12 +1087,12 @@ class ComprehensiveReportV11:
                         sentiment_icon = "📈" if news['sentiment'] > 0.3 else "📉" if news['sentiment'] < -0.3 else "➡️"
                         report += f"{sentiment_icon} {news['title']}\n\n"
                         report += f"   {news['timestamp']}\n\n"
-            
+
             if not has_news:
                 report += "\n暂无持仓相关重要新闻\n"
         else:
             report += "\n暂无持仓\n"
-        
+
         report += "\n### 🌍 市场重要新闻\n\n"
         if market_news:
             for news in market_news:
@@ -1075,7 +1101,7 @@ class ComprehensiveReportV11:
                 report += f"   来源: {news['source']} | {news['timestamp']}\n\n"
         else:
             report += "暂无市场重要新闻\n"
-        
+
         report += """
 
 ### 🇭🇰 港股市场走势分析
@@ -1087,14 +1113,14 @@ class ComprehensiveReportV11:
                 chg_pct = safe_float(data.get('change_pct'))
                 trend = "上涨" if chg_pct >= 0 else "下跌"
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
-        
+
         # LLM解读港股走势
         hk_analysis = self.llm.get_market_analysis('hk', hk_index_data, self.hk_vhsi, sentiment_full=self.hk_sentiment_full)
         if hk_analysis:
             report += f"\n> {hk_analysis}\n\n"
         else:
             report += f"\n**VHSI波幅指数**: {self.hk_vhsi:.1f}\n\n"
-        
+
         report += """### 🇺🇸 美股市场走势分析
 
 **美股三大指数表现**：
@@ -1104,22 +1130,22 @@ class ComprehensiveReportV11:
                 chg_pct = safe_float(data.get('change_pct'))
                 trend = "上涨" if chg_pct >= 0 else "下跌"
                 report += f"• {name}: {safe_float(data.get('price')):,.2f} ({chg_pct:+.2f}%)，今日{trend}\n"
-        
+
         # LLM解读美股走势
         us_analysis = self.llm.get_market_analysis('us', us_index_data, self.us_vix, sentiment_full=self.us_sentiment_full)
         if us_analysis:
             report += f"\n> {us_analysis}\n\n"
         else:
             report += f"\n**VIX恐慌指数**: {self.us_vix:.1f}\n\n"
-        
+
         # 判断情绪状态
         hk_emotion = "🔴 极度恐慌" if self.hk_vhsi >= 30 else "🟠 恐慌" if self.hk_vhsi >= 25 else "🟡 正常" if self.hk_vhsi >= 20 else "🟢 平静"
         us_emotion = "🔴 极度恐慌" if self.us_vix >= 30 else "🟠 恐慌" if self.us_vix >= 25 else "🟡 正常" if self.us_vix >= 20 else "🟢 平静"
-        
+
         # 获取LLM市场预测
         hk_prediction = self.llm.get_market_prediction('hk', self.hk_vhsi, hk_index_data, sentiment_full=self.hk_sentiment_full)
         us_prediction = self.llm.get_market_prediction('us', self.us_vix, us_index_data, sentiment_full=self.us_sentiment_full)
-        
+
         # 2026-06-18 east 修复：港股多数据源情绪表格
         report += "\n### 🇭🇰 港股市场情绪\n\n"
         if self.hk_sentiment_full:
@@ -1149,7 +1175,7 @@ class ComprehensiveReportV11:
 | T+2日 | 乐观 | 65% | 科技股机会 |
 | T+3日 | 中性 | 60% | 等待信号 |
 """
-        
+
         # 2026-06-18 east 修复：美股多数据源情绪表格
         report += "\n### 🇺🇸 美股市场情绪\n\n"
         if self.us_sentiment_full:
@@ -1186,7 +1212,7 @@ class ComprehensiveReportV11:
 
         # 获取财报日历
         earnings = self.get_earnings_calendar(days=7)
-        
+
         report += """## 📈 七、财报与业绩预测
 
 **未来7天即将发布财报的公司：**
@@ -1194,7 +1220,7 @@ class ComprehensiveReportV11:
 | 标的代码 | 财报日期 | 披露时间 | 预期EPS | 预期营收 |
 |----------|----------|----------|---------|----------|
 """
-        
+
         if earnings:
             for e in earnings:
                 time_label = "盘前" if e['hour'] == 'bmo' else "盘后" if e['hour'] == 'amc' else "-"
@@ -1236,7 +1262,7 @@ class ComprehensiveReportV11:
             'hk_capital_flow': self.hk_sentiment_full.get('capital_flow') if self.hk_sentiment_full else None,
             'hk_warrant_ratio': self.hk_sentiment_full.get('bull_bear_ratio') if self.hk_sentiment_full else None,
         }
-        
+
         # LLM动态风险分析 + 操作建议（合并为一次调用，两部分逻辑保持一致）
         combined = self.llm.get_combined_assessment(llm_market_data) or {}
         risk_text   = combined.get('risk_text')
@@ -1304,25 +1330,25 @@ class ComprehensiveReportV11:
             elif pos_pct < 20:
                 report += "• 💡 当前仓位较低，可关注市场机会择机建仓\n\n"
             report += "• 📊 单票止损-6%，止盈+15%\n\n"
-        
+
         report += f"""---
 
 ⏰ *报告生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}*
 *🧠 风险评估与操作建议由LLM动态生成*
 """
         return report
-    
+
     def save_report(self):
         """保存日报到文件"""
         # 2026-06-19 east：文件名使用 report_date_str（美股模式 = 美股交易日）
         date_for_file = self.report_date_str
         md_file = MD_FILE.format(date_for_file)
         os.makedirs(os.path.dirname(md_file), exist_ok=True)
-        
+
         report = self.build_markdown_report()
         with open(md_file, 'w', encoding='utf-8') as f:
             f.write(report)
-        
+
         print(f"✅ 日报已保存: {md_file}")
         return md_file, report
 
@@ -1339,14 +1365,15 @@ def create_feishu_doc(title, content):
         pass
     return None
 
-def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
+def send_to_feishu_chat(message, chat_id=None):
     """发送消息到飞书群聊 - 使用FeishuPusher"""
     try:
         from feishu_pusher import FeishuPusher
         pusher = FeishuPusher()
         # 临时设置chat_id
         original_chat_id = pusher.chat_id
-        pusher.chat_id = chat_id
+        if chat_id:
+            pusher.chat_id = chat_id
         success = pusher.send_message(message)
         pusher.chat_id = original_chat_id
         return success
@@ -1358,7 +1385,7 @@ def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
 def is_hk_holiday():
     """检查今天是否是港股休市日（香港公众假期）"""
     from datetime import date
-    
+
     # 香港2026年公众假期（仅影响港股日报）
     hk_holidays_2026 = [
         '2026-01-01',  # 元旦
@@ -1381,7 +1408,7 @@ def is_hk_holiday():
         '2026-12-25',  # 圣诞节
         '2026-12-26',  # 圣诞节后首个周日
     ]
-    
+
     today_str = datetime.now().strftime("%Y-%m-%d")
     return today_str in hk_holidays_2026
 
@@ -1432,8 +1459,8 @@ def sync_futu_data():
     try:
         print("🔄 同步富途账户数据...")
         result = subprocess.run(
-            ['/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3',
-             '/home/admin/.openclaw/workspace-stock/strategy/sync-futu-account.py'],
+            [str(PYTHON_BIN),
+             str(STRATEGY_DIR / 'sync-futu-account.py')],
             capture_output=True, text=True, timeout=60
         )
         if result.returncode == 0:
@@ -1451,7 +1478,7 @@ def main():
     import sys
     us_mode = '--us' in sys.argv
     today = datetime.now().strftime("%Y-%m-%d")
-    
+
     # 根据模式检查对应的交易日
     if us_mode:
         # 美股模式：检查美股交易日（北京今天 -1）
@@ -1466,12 +1493,12 @@ def main():
             print(f"⏭️ 今天是港股休市日（{today}），跳过港股日报")
             return
         title = f"📊 港股日报 {today}"
-    
+
     print(f"📊 生成日报: {title}")
-    
+
     # 0. 同步数据
     sync_futu_data()
-    
+
     # 1. 生成日报
     print("📝 生成完整日报...")
     # 2026-06-19 east：美股报告日期 = 美股交易日（北京今天 -1），港股 = 北京今天
@@ -1482,14 +1509,14 @@ def main():
     reporter = ComprehensiveReportV11(us_mode=us_mode, report_date_str=report_date_for_obj)
     reporter.fetch_data()
     md_file, report_content = reporter.save_report()
-    
+
     # 2. 上传到飞书Wiki
     print("☁️ 上传到飞书Wiki...")
     doc_url = create_feishu_doc(title, report_content)
-    
+
     if doc_url:
         print(f"✅ 上传成功: {doc_url}")
-        
+
         # 3. 发送链接到群聊
         message = f"📊 今日日报已生成\n{doc_url}"
         print(f"📤 发送链接到群聊...")

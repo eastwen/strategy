@@ -1,304 +1,5 @@
 [
   {
-    "symbol": "HK.00012",
-    "shares": 1000,
-    "entry_price": 29.98,
-    "entry_time": "2026-04-08T15:56:40.771390",
-    "market": "hk",
-    "entry_score": 100,
-    "entry_reasons": [
-      "评分100分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=68.8在35-70区间",
-      "⚠️ 成交量仅0.8倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T15:56:40.771409"
-  },
-  {
-    "symbol": "US.UNH",
-    "shares": 416,
-    "entry_price": 307.73,
-    "entry_time": "2026-04-08T21:53:38.406576",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "⚠️ RSI=65.3≥65，不建议入场",
-      "⚠️ 成交量仅0.2倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T21:53:38.406624"
-  },
-  {
-    "symbol": "US.PSKY",
-    "shares": 11760,
-    "entry_price": 10.9,
-    "entry_time": "2026-04-08T21:53:40.399387",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "⚠️ RSI=84.1≥65，不建议入场",
-      "⚠️ 成交量仅0.2倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T21:53:40.399412"
-  },
-  {
-    "symbol": "US.VST",
-    "shares": 797,
-    "entry_price": 160.75,
-    "entry_time": "2026-04-08T21:57:58.784735",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "✅ RSI=39.9<65，可入场",
-      "⚠️ 成交量仅0.1倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T21:57:58.784750"
-  },
-  {
-    "symbol": "US.ORCL",
-    "shares": 881,
-    "entry_price": 145.34,
-    "entry_time": "2026-04-08T22:28:27.994214",
-    "market": "us",
-    "entry_score": 100,
-    "entry_reasons": [],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T22:28:27.994301"
-  },
-  {
-    "symbol": "US.GOOGL",
-    "shares": 403,
-    "entry_price": 316.12,
-    "entry_time": "2026-04-08T23:23:18.149134",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-08T23:23:18.149183"
-  },
-  {
-    "symbol": "US.MSFT",
-    "shares": 336,
-    "entry_price": 378.6,
-    "entry_time": "2026-04-09T00:46:43.084028",
-    "market": "us",
-    "entry_score": 90,
-    "entry_reasons": [],
-    "peak_pnl_pct": 0.0,
-    "peak_time": "2026-04-09T00:46:43.084053"
-  },
-  {
-    "symbol": "US.PG",
-    "shares": 259,
-    "entry_price": 146.54,
-    "entry_time": "2026-06-08T21:30:09.174190",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "✅ RSI=59.6<65，可入场",
-      "⚠️ 成交量仅1.3倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 5.136397993540851,
-    "peak_time": "2026-06-25T00:25:04.247870"
-  },
-  {
-    "symbol": "US.AMPH",
-    "shares": 6,
-    "entry_price": 19.74,
-    "entry_time": "2026-06-08T21:30:13.029408",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "⚠️ RSI=77.1≥65，不建议入场",
-      "⚠️ 成交量仅0.9倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 4.493526275704493,
-    "peak_time": "2026-06-10T23:15:02.772754"
-  },
-  {
-    "symbol": "US.GE",
-    "shares": 1,
-    "entry_price": 328.35,
-    "entry_time": "2026-06-12T03:15:11.892096",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20>MA50上升趋势 (MA20=311.92, MA50=301.97)",
-      "⚠️ RSI=66.6≥65，不建议入场",
-      "⚠️ 成交量仅0.5倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 5.270191466614832,
-    "peak_time": "2026-06-15T22:15:03.014531"
-  },
-  {
-    "symbol": "US.ACET",
-    "shares": 15350,
-    "entry_price": 8.08,
-    "entry_time": "2026-06-13T02:45:09.126700",
-    "market": "us",
-    "entry_score": 92,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20>MA50上升趋势 (MA20=7.95, MA50=7.84)",
-      "✅ RSI=49.6<65，可入场",
-      "⚠️ 成交量仅0.8倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 7.195121951219513,
-    "peak_time": "2026-06-25T21:00:05.410451"
-  },
-  {
-    "symbol": "US.BIOA",
-    "shares": 10,
-    "entry_price": 17.86,
-    "entry_time": "2026-06-13T03:30:09.686866",
-    "market": "us",
-    "entry_score": 93,
-    "entry_reasons": [
-      "评分85分",
-      "✅ RSI=57.3<65，可入场",
-      "⚠️ 成交量仅0.8倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 6.176305446378439,
-    "peak_time": "2026-06-15T23:15:03.016453"
-  },
-  {
-    "symbol": "US.V",
-    "shares": 430,
-    "entry_price": 333.12,
-    "entry_time": "2026-06-17T21:35:39.903644",
-    "market": "us",
-    "entry_score": 100,
-    "entry_reasons": [
-      "评分100分",
-      "✅ MA20>MA50上升趋势 (MA20=324.69, MA50=320.46)",
-      "✅ RSI=59.0<65，可入场",
-      "⚠️ 成交量仅0.0倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 1.1465157832042883,
-    "peak_time": "2026-06-25T22:25:03.722336"
-  },
-  {
-    "symbol": "HK.00291",
-    "shares": 1000,
-    "entry_price": 21.8,
-    "entry_time": "2026-06-18T14:55:53.758652",
-    "market": "hk",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=55.7在35-70区间",
-      "⚠️ 成交量仅1.4倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 0.1833180568285976,
-    "peak_time": "2026-06-19T09:30:03.959146"
-  },
-  {
-    "symbol": "US.INTC",
-    "shares": 1052,
-    "entry_price": 121.1,
-    "entry_time": "2026-06-18T21:35:31.210966",
-    "market": "us",
-    "entry_score": 89,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20>MA50上升趋势 (MA20=116.36, MA50=101.43)",
-      "✅ RSI=61.1<65，可入场",
-      "⚠️ 成交量仅0.3倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 4.947101773208165,
-    "peak_time": "2026-06-23T03:25:04.283785"
-  },
-  {
-    "symbol": "HK.00027",
-    "shares": 1000,
-    "entry_price": 29.58,
-    "entry_time": "2026-06-22T10:51:19.540024",
-    "market": "hk",
-    "entry_score": 86,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=44.8在35-70区间",
-      "⚠️ 成交量仅1.2倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 2.0960108181203516,
-    "peak_time": "2026-06-25T09:30:04.873462"
-  },
-  {
-    "symbol": "HK.00300",
-    "shares": 300,
-    "entry_price": 82.9,
-    "entry_time": "2026-06-22T14:51:14.041921",
-    "market": "hk",
-    "entry_score": 86,
-    "entry_reasons": [
-      "评分87分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=57.4在35-70区间",
-      "⚠️ 成交量仅0.8倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 0.30156815440289503,
-    "peak_time": "2026-06-22T15:20:04.586771"
-  },
-  {
-    "symbol": "HK.00267",
-    "shares": 2000,
-    "entry_price": 12.16,
-    "entry_time": "2026-06-23T15:53:17.875389",
-    "market": "hk",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分86分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=65.2在35-70区间",
-      "⚠️ 成交量仅0.8倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 0.8223684210526315,
-    "peak_time": "2026-06-24T09:30:04.540127"
-  },
-  {
-    "symbol": "US.IRM",
-    "shares": 635,
-    "entry_price": 131.86,
-    "entry_time": "2026-06-23T21:30:35.493789",
-    "market": "us",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分85分",
-      "✅ MA20>MA50上升趋势 (MA20=126.34, MA50=123.02)",
-      "✅ RSI=59.9<65，可入场",
-      "⚠️ 成交量仅1.3倍，不足1.8倍",
-      "✅ MACD无死叉"
-    ],
-    "peak_pnl_pct": 2.619084086383826,
-    "peak_time": "2026-06-24T21:00:05.447531"
-  },
-  {
     "symbol": "US.TPR",
     "shares": 448,
     "entry_price": 149.2,
@@ -313,24 +14,15 @@
       "✅ MACD无死叉"
     ],
     "peak_pnl_pct": 3.735063161488563,
-    "peak_time": "2026-06-24T22:25:03.903366"
-  },
-  {
-    "symbol": "HK.00285",
-    "shares": 1000,
-    "entry_price": 22.12,
-    "entry_time": "2026-06-24T09:55:28.532076",
-    "market": "hk",
-    "entry_score": 85,
-    "entry_reasons": [
-      "评分90分",
-      "✅ MA20上升趋势，价格>MA20",
-      "✅ RSI=59.9在35-70区间",
-      "⚠️ 成交量仅0.9倍，不足1.5倍",
-      "⚠️ 无增强信号"
-    ],
-    "peak_pnl_pct": 0.45207956600361665,
-    "peak_time": "2026-06-24T14:25:04.004371"
+    "peak_time": "2026-06-24T22:25:03.903366",
+    "atr": 4.9993,
+    "atr_stop": 139.2,
+    "tp_first": 159.2,
+    "tp_trend": 169.2,
+    "staged_first": 140.25,
+    "hard_stop": 134.28,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:08.435423"
   },
   {
     "symbol": "HK.00688",
@@ -346,7 +38,220 @@
       "⚠️ 成交量仅0.8倍，不足1.5倍",
       "⚠️ 无增强信号"
     ],
-    "peak_pnl_pct": 0.8620689655172413,
-    "peak_time": "2026-06-24T13:25:03.810121"
+    "peak_pnl_pct": 1.8025078369905956,
+    "peak_time": "2026-07-10T12:05:04.895439",
+    "atr": 0.3971,
+    "atr_stop": 12.16,
+    "tp_first": 13.55,
+    "tp_trend": 13.95,
+    "staged_first": 11.99,
+    "hard_stop": 11.48,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:09.029766"
+  },
+  {
+    "symbol": "HK.01928",
+    "shares": 2000,
+    "entry_price": 13.19,
+    "entry_time": "2026-07-07T09:58:58.071293",
+    "market": "hk",
+    "entry_score": 72,
+    "entry_reasons": [
+      "评分72分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=62.3在35-70区间",
+      "⚠️ 成交量仅1.0倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 2.1986353297952994,
+    "peak_time": "2026-07-08T15:05:04.824653",
+    "atr": 0.7943,
+    "atr_stop": 12.0,
+    "tp_first": 14.78,
+    "tp_trend": 15.57,
+    "hard_stop": 11.87,
+    "staged_first": 12.4,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:09.318804"
+  },
+  {
+    "symbol": "HK.01024",
+    "shares": 600,
+    "entry_price": 43.88,
+    "entry_time": "2026-07-08T13:59:05.540340",
+    "market": "hk",
+    "entry_score": 0,
+    "entry_reasons": [
+      "评分76分",
+      "✅ MA20上升趋势，价格>MA20",
+      "✅ RSI=63.6在35-70区间",
+      "⚠️ 成交量仅1.1倍，不足1.5倍",
+      "⚠️ 无增强信号"
+    ],
+    "peak_pnl_pct": 0.2278942570647219,
+    "peak_time": "2026-07-08T14:05:04.582966",
+    "atr": 4.1679,
+    "atr_stop": 37.63,
+    "tp_first": 52.22,
+    "tp_trend": 56.38,
+    "hard_stop": 39.49,
+    "staged_first": 41.25,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:09.600333"
+  },
+  {
+    "symbol": "US.MRVL",
+    "shares": 625,
+    "entry_price": 245.84,
+    "entry_time": "2026-07-09T22:54:15.890154",
+    "market": "us",
+    "entry_score": 80,
+    "entry_reasons": [
+      "评分80分",
+      "✅ RSI=38.8<65，可入场",
+      "⚠️ 成交量仅0.2倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 1.065733810608526,
+    "peak_time": "2026-07-10T00:05:05.873776",
+    "atr": 22.5029,
+    "atr_stop": 200.83,
+    "tp_first": 290.85,
+    "tp_trend": 335.85,
+    "hard_stop": 221.26,
+    "staged_first": 231.09,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:09.784787"
+  },
+  {
+    "symbol": "US.AEHR",
+    "shares": 1984,
+    "entry_price": 75.73,
+    "entry_time": "2026-07-10T03:54:03.921754",
+    "market": "us",
+    "entry_score": 80,
+    "entry_reasons": [
+      "评分80分",
+      "✅ RSI=27.0<65，可入场",
+      "⚠️ 成交量仅1.3倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 1.914696949689687,
+    "peak_time": "2026-07-10T04:05:04.349820",
+    "atr": 10.0007,
+    "atr_stop": 55.73,
+    "tp_first": 95.73,
+    "tp_trend": 115.73,
+    "hard_stop": 68.16,
+    "staged_first": 71.19,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:09.960098"
+  },
+  {
+    "symbol": "US.NFLX",
+    "shares": 1885,
+    "entry_price": 73.235,
+    "entry_time": null,
+    "market": "us",
+    "entry_score": 0,
+    "entry_reasons": [
+      "手动买入/补录"
+    ],
+    "peak_pnl_pct": 0.6281149723492865,
+    "atr": 2.7142,
+    "atr_stop": 67.81,
+    "tp_first": 78.66,
+    "tp_trend": 84.09,
+    "staged_first": 68.84,
+    "hard_stop": 65.91,
+    "peak_time": "2026-07-11T03:10:06.260336",
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:10.205932"
+  },
+  {
+    "symbol": "US.WFC",
+    "shares": 1769,
+    "entry_price": 85.62,
+    "entry_time": null,
+    "market": "us",
+    "entry_score": 0,
+    "entry_reasons": [
+      "手动买入/补录"
+    ],
+    "peak_pnl_pct": 1.8570427470217241,
+    "atr": 1.7671,
+    "atr_stop": 82.09,
+    "tp_first": 89.15,
+    "tp_trend": 92.69,
+    "staged_first": 80.48,
+    "hard_stop": 77.06,
+    "peak_time": "2026-07-11T03:10:06.264754",
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:10.487315"
+  },
+  {
+    "symbol": "US.RTX",
+    "shares": 827,
+    "entry_price": 181.34999999999997,
+    "entry_time": null,
+    "market": "us",
+    "entry_score": 0,
+    "entry_reasons": [
+      "手动买入/补录"
+    ],
+    "peak_pnl_pct": 8.03970223325062,
+    "atr": 4.2057,
+    "atr_stop": 172.94,
+    "tp_first": 189.76,
+    "tp_trend": 198.17,
+    "staged_first": 170.47,
+    "hard_stop": 163.21,
+    "peak_time": "2026-07-11T04:10:05.707151",
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:10.766719"
+  },
+  {
+    "symbol": "HK.00101",
+    "shares": 4000,
+    "entry_price": 7.02,
+    "entry_time": null,
+    "market": "hk",
+    "entry_score": 0,
+    "entry_reasons": [
+      "手动买入/补录"
+    ],
+    "peak_pnl_pct": 1.1396,
+    "atr": 0.1914,
+    "atr_stop": 6.73,
+    "tp_first": 7.4,
+    "tp_trend": 7.59,
+    "staged_first": 6.6,
+    "hard_stop": 6.32,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:11.040697"
+  },
+  {
+    "symbol": "US.META",
+    "shares": 167,
+    "entry_price": 669.61,
+    "entry_time": "2026-07-10T23:54:27.462973",
+    "market": "us",
+    "entry_score": 82,
+    "entry_reasons": [
+      "评分82分",
+      "⚠️ RSI=69.1≥65，不建议入场",
+      "⚠️ 成交量仅1.2倍，不足1.8倍",
+      "✅ MACD无死叉"
+    ],
+    "peak_pnl_pct": 0.00074420266126871,
+    "peak_time": "2026-07-10T23:55:04.425184",
+    "atr": 26.8371,
+    "atr_stop": 615.94,
+    "tp_first": 723.28,
+    "tp_trend": 776.96,
+    "hard_stop": 602.65,
+    "staged_first": 629.43,
+    "risk_targets_version": 2,
+    "risk_targets_updated_at": "2026-07-11T00:49:11.585739"
   }
 ]

@@ -28,3 +28,9 @@ __pycache__/
 daily-reports/*.md
 weekly-reports/*.md
 monthly-reports/*.md
+
+# IDE / tool configs
+strategy/.api-keys.json
+strategy/.qoder/
+strategy/venv.bak/
+strategy/__pycache__/

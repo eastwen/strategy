@@ -9,43 +9,26 @@ import json
 import time
 import os
 
+from runtime_config import load_api_keys
+
 class FeishuPusher:
     """飞书推送器"""
 
     def __init__(self):
-        self.app_id = "cli_a93b169884f8dcc1"
-        self.app_secret = self._load_app_secret()
-        self.open_id = "ou_571e965fc81a2e887609a06ed6103d66"
-        self.chat_id = self._load_chat_id()  # 群聊ID
+        self.config = load_api_keys().get('feishu', {})
+        self.app_id = self.config.get('appId', '')
+        self.app_secret = self.config.get('appSecret', '')
+        self.open_id = self.config.get('openId', '')
+        self.chat_id = self.config.get('chatId')  # 群聊ID
         self.base_url = "https://open.feishu.cn/open-apis"
         self.tenant_access_token = None
         self.token_expire_time = 0
 
     def _load_chat_id(self):
-        """从配置文件加载群聊ID"""
-        config_path = '/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json'
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                    if 'feishu' in config:
-                        return config['feishu'].get('chatId')
-            except:
-                pass
-        return None
+        return load_api_keys().get('feishu', {}).get('chatId')
 
     def _load_app_secret(self):
-        """从配置文件加载 App Secret"""
-        config_path = '/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json'
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, 'r') as f:
-                    config = json.load(f)
-                    if 'feishu' in config:
-                        return config['feishu'].get('appSecret')
-            except:
-                pass
-        return None
+        return load_api_keys().get('feishu', {}).get('appSecret')
 
     def set_app_secret(self, secret):
         """设置App Secret"""
@@ -130,8 +113,8 @@ class FeishuPusher:
         content = f"⚠️ {title}\n\n{message}\n\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         return self.send_message(content)
 
-    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None):
-        """发送自动买入通知(真实四源评分版)
+    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None):
+        """发送自动买入通知(真实五源评分版)
 
         2026-06-24 east 修复：
           - risk_note 携带完整 ATR 风控规则
@@ -168,10 +151,11 @@ class FeishuPusher:
 {target_line}
 
 📊 评分明细: 总分{score_total}
- 国际资讯: {score_news}/30{tag('news')}{ev_line('news')}
+ 国际资讯: {score_news}/25{tag('news')}{ev_line('news')}
  官方公告: {score_announce}/20{tag('announce')}{ev_line('announce')}
  社区情绪: {score_community}/25{tag('community')}{ev_line('community')}
- 机构观点: {score_institution}/25{tag('institution')}{ev_line('institution')}
+ 机构观点: {score_institution}/20{tag('institution')}{ev_line('institution')}
+ 资金异动: {score_capital}/10{tag('capital')}{ev_line('capital')}
 
 🔍 信号类型: {signal_type}
 🤖 LLM验真: {llm_conclusion}
@@ -198,8 +182,8 @@ class FeishuPusher:
 时间: {timestamp}"""
         return self.send_message(content)
 
-    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None):
-        """发送非交易时间交易机会通知(真实四源评分版)"""
+    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None):
+        """发送非交易时间交易机会通知(真实五源评分版)"""
         uncov = set(estimated_keys or [])
         def tag(key):
             return ' (未覆盖)' if key in uncov else ''
@@ -213,10 +197,11 @@ class FeishuPusher:
 标的: {symbol}
 
 📊 评分明细: 总分{score_total}
- 国际资讯: {score_news}/30{tag('news')}{ev_line('news')}
+ 国际资讯: {score_news}/25{tag('news')}{ev_line('news')}
  官方公告: {score_announce}/20{tag('announce')}{ev_line('announce')}
  社区情绪: {score_community}/25{tag('community')}{ev_line('community')}
- 机构观点: {score_institution}/25{tag('institution')}{ev_line('institution')}
+ 机构观点: {score_institution}/20{tag('institution')}{ev_line('institution')}
+ 资金异动: {score_capital}/10{tag('capital')}{ev_line('capital')}
 
 🔍 信号类型: {signal_type}
 🤖 LLM验真: {llm_conclusion}
@@ -240,7 +225,6 @@ if __name__ == '__main__':
     print("=" * 60)
     print("飞书推送模块测试")
     print("=" * 60)
-    print(f"App ID: cli_a93b169884f8dcc1")
     print(f"Open ID: ou_571e965fc81a2e887609a06ed6103d66")
     print()
     print("⚠️ 需要 App Secret 才能发送消息")

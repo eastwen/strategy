@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 策略心跳检查脚本 v1.0
 整合数据检查功能，可输出到日志或飞书
@@ -10,13 +10,14 @@ import json
 import datetime
 import requests
 
+from runtime_config import DATA_DIR, FUTU_OPEND_BIN, load_api_keys
+
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def check_pending_reports():
     """检查待发日报"""
-    workspace_dir = '/home/admin/.openclaw/workspace-stock'
-    pending_dir = os.path.join(workspace_dir, 'data/pending-reports')
+    pending_dir = DATA_DIR / 'pending-reports'
     if os.path.exists(pending_dir):
         count = len([f for f in os.listdir(pending_dir) 
                     if os.path.isfile(os.path.join(pending_dir, f))])
@@ -26,8 +27,7 @@ def check_pending_reports():
 def check_opportunities():
     """检查交易机会"""
     try:
-        workspace_dir = '/home/admin/.openclaw/workspace-stock'
-        opportunities_path = os.path.join(workspace_dir, 'data/us-opportunities.json')
+        opportunities_path = DATA_DIR / 'us-opportunities.json'
         with open(opportunities_path, 'r') as f:
             data = json.load(f)
         
@@ -46,8 +46,7 @@ def check_opportunities():
 def check_trades():
     """检查交易状态"""
     try:
-        workspace_dir = '/home/admin/.openclaw/workspace-stock'
-        trades_path = os.path.join(workspace_dir, 'data/trades.json')
+        trades_path = DATA_DIR / 'trades.json'
         with open(trades_path, 'r') as f:
             data = json.load(f)
         
@@ -63,8 +62,7 @@ def check_trades():
 def check_alerts():
     """检查警报数据时效性"""
     try:
-        workspace_dir = '/home/admin/.openclaw/workspace-stock'
-        alerts_path = os.path.join(workspace_dir, 'data/alerts.json')
+        alerts_path = DATA_DIR / 'alerts.json'
         with open(alerts_path, 'r') as f:
             data = json.load(f)
         
@@ -109,7 +107,7 @@ def check_futu_opend():
     try:
         # 启动 Futu OpenD
         subprocess.Popen(
-            ['/home/admin/Futu_OpenD_10.2.6208_Ubuntu18.04/FutuOpenD', '/home/admin/Futu_OpenD_10.2.6208_Ubuntu18.04/'],
+            [str(FUTU_OPEND_BIN), str(FUTU_OPEND_BIN.parent)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
@@ -129,9 +127,10 @@ def send_to_feishu(message):
     try:
         # 获取 token
         token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        feishu = load_api_keys().get('feishu', {})
         token_data = {
-            "app_id": "cli_a93b169884f8dcc1",
-            "app_secret": "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV"
+            "app_id": feishu.get('appId', ''),
+            "app_secret": feishu.get('appSecret', ''),
         }
         
         resp = requests.post(token_url, json=token_data, timeout=10)
@@ -148,7 +147,7 @@ def send_to_feishu(message):
             "Content-Type": "application/json"
         }
         msg_data = {
-            "receive_id": "oc_f6c5168cb212e624d21ccfabed49b083",
+            "receive_id": feishu.get("chatId", ""),
             "msg_type": "text",
             "content": json.dumps({"text": message})
         }
@@ -191,7 +190,7 @@ def main():
     if not futu_ok:
         issues.append(f"Futu OpenD: {futu_msg}")
     if not llm_ok:
-        issues.append(f"⚠️ LLM API 不可用 → 自动开仓已阅阈断 ({llm_msg})")
+        issues.append(f"⚠️ LLM API 不可用 → 自动开仓已阻断 ({llm_msg})")
     if pending_reports > 0:
         issues.append(f"{pending_reports}个日报待发")
     if alert_age > 24:

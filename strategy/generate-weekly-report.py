@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 周报生成器 v3.0 - 动态数据版
 统计本周交易数据、持仓表现、策略分析
@@ -11,20 +11,20 @@ import requests
 from datetime import datetime, timedelta
 import re
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR
 from futu import OpenQuoteContext, RET_OK
 
 # 常量
-DATA_FILE = "/home/admin/.openclaw/workspace-stock/data/trades.json"
-CLOSED_TRADES_FILE = "/home/admin/.openclaw/workspace-stock/data/closed-trades.json"
-WEEKLY_HISTORY_FILE = "/home/admin/.openclaw/workspace-stock/data/weekly-history.json"
-API_KEYS_FILE = "/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json"
+DATA_FILE = str(DATA_DIR / 'trades.json')
+CLOSED_TRADES_FILE = str(DATA_DIR / 'closed-trades.json')
+WEEKLY_HISTORY_FILE = str(DATA_DIR / 'weekly-history.json')
+API_KEYS_FILE = str(API_KEYS_PATH)
 
 
 def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
     """用LLM生成下周操作建议 - 通过llm_stock_analyzer统一调用"""
     import sys
-    sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+    sys.path.insert(0, str(STRATEGY_DIR))
     from llm_stock_analyzer import get_llm_client
     
     client = get_llm_client()
@@ -85,7 +85,7 @@ class WeeklyReportV3:
             keys = json.load(f)
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_chat_id = keys['feishu'].get('chatId', 'oc_f6c5168cb212e624d21ccfabed49b083')
+        self.feishu_chat_id = keys['feishu'].get('chatId', '')
     
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -122,7 +122,7 @@ class WeeklyReportV3:
                         'symbol': symbol,
                         'shares': pos['shares'],
                         'cost': pos['cost_price'],
-                        'pnl_pct': pos.get('pl_ratio', 0) * 100,  # 小数转换为百分比
+                        'pnl_pct': pos.get('pl_ratio', 0),  # trades.json 使用百分比数值
                         'market_val': pos.get('market_val', 0),
                         'acc_id': pos.get('acc_id')
                     })
@@ -198,7 +198,7 @@ class WeeklyReportV3:
     def get_vix_data(self):
         """获取VIX"""
         try:
-            ctx = OpenQuoteContext('127.0.0.1', 11111)
+            ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             ret, data = ctx.get_market_snapshot(['US.VIX'])
             ctx.close()
             if ret == RET_OK and len(data) > 0:
@@ -210,7 +210,7 @@ class WeeklyReportV3:
     def get_vhsi_data(self):
         """获取VHSI"""
         try:
-            ctx = OpenQuoteContext('127.0.0.1', 11111)
+            ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             ret, data = ctx.get_market_snapshot(['HK.800125'])
             ctx.close()
             if ret == RET_OK and len(data) > 0:
@@ -441,7 +441,7 @@ class WeeklyReportV3:
 ### 🇭🇰 港股策略（v2.1 新闻增强版）
 
 **核心规则**
-- 四源共振：国际资讯(30%)、港股公告(20%)、国内社区(25%)、海外社交(25%)
+- 五源共振：国际资讯(25%)、港股公告(20%)、国内社区(25%)、机构/海外社交(20%)、资金异动(10%)
 - 新闻情绪：市场整体情绪(0.52)，正面+15分，负面-10分
 - 情绪监控：VHSI恒指波幅、港股通资金流向、牛熊证比例
 - 开仓规则：评分≥70分，均线金叉，成交量≥1.5倍，RSI 20-80，仓位2-5%
@@ -451,7 +451,7 @@ class WeeklyReportV3:
 ### 🇺🇸 美股策略（v1.7 LLM增强版）
 
 **核心规则**
-- 四源共振：国际资讯(35%)、监管公告(20%)、国内社区(25%)、海外社交(20%)
+- 五源共振：国际资讯(25%)、监管公告(20%)、社区情绪(25%)、机构观点(20%)、资金异动(10%)
 - LLM分析：基础评分≥70触发，最终评分≥65才入场
 - 严格择时：MA20>MA50，价格>MA20，技术信号≥2，成交量≥1.8倍，RSI<65
 - 开仓规则：评分≥70分，单票仓位12%，总仓位≤40%
@@ -518,7 +518,7 @@ class WeeklyReportV3:
 """
         
         # 保存报告
-        report_path = f"/home/admin/.openclaw/workspace-stock/daily-reports/{date_str}-weekly-report.md"
+        report_path = REPORTS_DIR / f'{date_str}-weekly-report.md'
         os.makedirs(os.path.dirname(report_path), exist_ok=True)
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report)
@@ -577,8 +577,8 @@ def sync_futu_data():
     try:
         print("🔄 同步富途账户数据...")
         result = subprocess.run(
-            ['/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3',
-             '/home/admin/.openclaw/workspace-stock/strategy/sync-futu-account.py'],
+            [str(PYTHON_BIN),
+             str(STRATEGY_DIR / 'sync-futu-account.py')],
             capture_output=True, text=True, timeout=60
         )
         if result.returncode == 0:

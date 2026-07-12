@@ -58,5 +58,20 @@
       }
     },
     "closed_trades": 19
+  },
+  "2026-07-11": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1250155.409,
+        "cash": 329408.049,
+        "position_value": 920747.36
+      },
+      "15270899": {
+        "total_asset": 989316.083,
+        "cash": 882592.083,
+        "position_value": 106724.0
+      }
+    },
+    "closed_trades": 12
   }
 }

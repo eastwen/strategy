@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 美股策略自我优化系统 v2.0
 深度分析：持仓、市场环境、VIX、ATR止损
@@ -8,18 +8,20 @@ import sys
 import json
 import os
 import requests
+
+from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_DIR, config_path, load_api_keys
 from datetime import datetime
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock')
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+
+sys.path.insert(0, str(STRATEGY_DIR))
 
 class USOptimizer:
     """美股策略自我优化系统 v2.0"""
     
     def __init__(self):
-        self.data_dir = '/home/admin/.openclaw/workspace-stock/data'
-        self.reports_dir = '/home/admin/.openclaw/workspace-stock/daily-reports'
-        self.config_dir = '/home/admin/.openclaw/workspace-stock/config'
+        self.data_dir = str(DATA_DIR)
+        self.reports_dir = str(REPORTS_DIR)
+        self.config_dir = str(config_path())
         
     def get_data(self):
         data = {}
@@ -46,7 +48,7 @@ class USOptimizer:
         
         positions = data.get('positions', [])
         for pos in positions:
-            pl = pos.get('pl_ratio', 0) * 100
+            pl = pos.get('pl_ratio', 0)  # trades.json 使用百分比数值
             info = {'symbol': pos.get('symbol'), 'pl_pct': pl}
             if pl < -1:
                 analysis['losing'].append(info)
@@ -182,19 +184,16 @@ class USOptimizer:
         print("="*60)
         return proposals
 
-def send_to_feishu_chat(message, chat_id="oc_f6c5168cb212e624d21ccfabed49b083"):
+def send_to_feishu_chat(message, chat_id=None):
     """发送消息到飞书群聊"""
     # 从.api-keys.json读取凭据
-    try:
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            keys_feishu = json.load(f).get('feishu', {})
-    except:
-        keys_feishu = {}
+    keys_feishu = load_api_keys().get('feishu', {})
+    chat_id = chat_id or keys_feishu.get('chatId', '')
     
     token_url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     token_data = {
-        "app_id": keys_feishu.get("appId", "cli_a93b169884f8dcc1"),
-        "app_secret": keys_feishu.get("appSecret", "9b8a6LP4Tki2ghq9muMcqdCg6m0bv5cV")
+        "app_id": keys_feishu.get("appId", ""),
+        "app_secret": keys_feishu.get("appSecret", "")
     }
     
     try:

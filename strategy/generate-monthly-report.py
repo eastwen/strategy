@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 月报生成器 v2.0 - 基于v12模板
 统计本月交易数据、收益归因、策略分析
@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from calendar import monthrange
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_DIR, load_api_keys
 from futu import OpenQuoteContext
 
 class MonthlyReportV2:
@@ -27,12 +27,11 @@ class MonthlyReportV2:
         self.feishu_token = None
     
     def load_config(self):
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            keys = json.load(f)
+        keys = load_api_keys()
         self.finnhub_key = keys['finnhub']['api_key']
         self.feishu_app_id = keys['feishu']['appId']
         self.feishu_app_secret = keys['feishu']['appSecret']
-        self.feishu_chat_id = keys['feishu'].get('chatId', 'oc_f6c5168cb212e624d21ccfabed49b083')
+        self.feishu_chat_id = keys['feishu'].get('chatId', '')
     
     def get_feishu_token(self):
         url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
@@ -48,7 +47,7 @@ class MonthlyReportV2:
     def fetch_account_data(self):
         """获取账户数据"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/trades.json', 'r') as f:
+            with open(str(DATA_DIR / 'trades.json'), 'r') as f:
                 data = json.load(f)
             
             if data.get('source') == 'futu_simulate':
@@ -75,7 +74,7 @@ class MonthlyReportV2:
                         'symbol': symbol,
                         'shares': pos['shares'],
                         'cost': pos['cost_price'],
-                        'pnl_pct': pos.get('pl_ratio', 0) * 100,  # 小数转换为百分比
+                        'pnl_pct': pos.get('pl_ratio', 0),  # trades.json 使用百分比数值
                         'market_val': pos.get('market_val', 0)
                     })
                 
@@ -89,7 +88,7 @@ class MonthlyReportV2:
         """获取信号数据"""
         # 港股信号
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/hk-opportunities.json', 'r') as f:
+            with open(str(DATA_DIR / 'hk-opportunities.json'), 'r') as f:
                 data = json.load(f)
                 self.hk_signals = data.get('opportunities', [])
         except:
@@ -97,7 +96,7 @@ class MonthlyReportV2:
         
         # 美股信号
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/us-opportunities.json', 'r') as f:
+            with open(str(DATA_DIR / 'us-opportunities.json'), 'r') as f:
                 data = json.load(f)
                 self.us_signals = data.get('opportunities', [])
         except:
@@ -131,7 +130,7 @@ class MonthlyReportV2:
         
         # LLM分析
         import sys
-        sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+        sys.path.insert(0, str(STRATEGY_DIR))
         from llm_stock_analyzer import get_llm_client
         llm_client = get_llm_client()
         
@@ -254,7 +253,7 @@ class MonthlyReportV2:
 
 **核心特点**
 - 动态行业权重调整（0.2-2.0）
-- 四源共振：资讯+公告+社区+社交
+- 五源共振：资讯+公告+社区+机构+资金
 - 情绪监控：VHSI、资金流向、牛熊证比例
 
 **回测表现**
@@ -333,7 +332,7 @@ class MonthlyReportV2:
 """
         
         # 保存报告
-        report_path = f"/home/admin/.openclaw/workspace-stock/daily-reports/{date_str}-monthly-report.md"
+        report_path = REPORTS_DIR / f'{date_str}-monthly-report.md'
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report)
         

@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """资讯管道 - 稳定可用的新闻获取与存储"""
 import requests
 import json
@@ -11,11 +11,11 @@ import sqlite3
 from typing import List, Dict, Any
 import sys
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import DATA_DIR, NEWS_DB_PATH, NEWS_DIR, config_path, load_api_keys
 
 # ========== 数据库管理 ==========
 class NewsDatabase:
-    def __init__(self, db_path: str = '/home/admin/.openclaw/workspace-stock/data/news/news.db'):
+    def __init__(self, db_path=NEWS_DB_PATH):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self.init_database()
@@ -203,7 +203,7 @@ class StableNewsSources:
     def __init__(self):
         # 加载API密钥
         try:
-            API_KEYS = json.load(open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json'))
+            API_KEYS = load_api_keys()
             self.FINNHUB_KEY = API_KEYS['finnhub']['api_key']
             self.ALPHA_KEY = API_KEYS['alphavantage']['api_key']
         except:
@@ -449,8 +449,7 @@ class StableNewsSources:
             
             # 加载Tushare token
             try:
-                with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-                    config = json.load(f)
+                config = load_api_keys()
                 token = config.get('tushare', {}).get('token', '')
                 
                 if not token:
@@ -843,7 +842,7 @@ class StableNewsSources:
     def get_position_symbols(self) -> List[str]:
         """获取当前持仓股票列表"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/trades.json', 'r') as f:
+            with (DATA_DIR / 'trades.json').open('r', encoding='utf-8') as f:
                 data = json.load(f)
             
             symbols = []
@@ -1289,7 +1288,7 @@ class NewsScheduler:
                 'alerts': alerts
             }
             
-            with open('/home/admin/.openclaw/workspace-stock/data/alerts.json', 'w', encoding='utf-8') as f:
+            with (DATA_DIR / 'alerts.json').open('w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             
             sym_count = sum(1 for a in alerts if a.get('symbol'))
@@ -1303,7 +1302,7 @@ class NewsScheduler:
         """保存摘要文件"""
         try:
             date_str = datetime.now().strftime('%Y-%m-%d')
-            summary_path = f'/home/admin/.openclaw/workspace-stock/data/news/summary_{date_str}.md'
+            summary_path = NEWS_DIR / f'summary_{date_str}.md'
             
             with open(summary_path, 'w', encoding='utf-8') as f:
                 f.write(f"# 新闻摘要 {date_str}\n\n")
@@ -1343,7 +1342,7 @@ class NewsScheduler:
 0 10 * * 6 cd {os.path.dirname(__file__)} && {sys.executable} {__file__} --report=weekly
 '''
         
-        cron_file = '/home/admin/.openclaw/workspace-stock/config/news_cron.txt'
+        cron_file = config_path('news_cron.txt')
         with open(cron_file, 'w', encoding='utf-8') as f:
             f.write(cron_content)
         

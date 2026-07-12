@@ -1,4 +1,4 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
+#!/usr/bin/env python3
 """
 美股扫描器 v2.0
 扫描标普500(503只) + 纳斯达克综合指数(3000+只)
@@ -10,10 +10,22 @@ import sys
 import os
 import json
 import time
+import threading
 import requests
 from datetime import datetime, date, time as dt_time
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+from runtime_config import (
+    DATA_DIR,
+    FUTU_HOST,
+    FUTU_PORT,
+    NEWS_DB_PATH,
+    PYTHON_BIN,
+    STRATEGY_DIR,
+    SKILLS_DIR,
+    config_path,
+    load_api_keys,
+)
 
 class USScanner:
     """美股扫描器 - 支持备用数据源"""
@@ -25,8 +37,10 @@ class USScanner:
         self.load_stock_pool(limit=self.scan_limit)
         self.load_config()
         self.data_source = 'finnhub'
-        # 可选的 Futu 行情上下文（扫描器本身不创建，避免总是接 OpenD）
+        # Futu 行情源有额度限制，只作为最后兜底；本轮不可用时自动禁用，避免逐股反复消耗。
         self.quote_ctx = None
+        self._futu_quote_disabled = False
+        self._futu_lock = threading.Lock()  # 并发扫描时保护 Futu 行情上下文
         # 市场情绪指标缓存（一次扫描只算一次，避免对 5251 只股票重复调用 VIX/CNN/期权 API）
         self._sentiment_cache = None
         self._sentiment_cache_time = 0
@@ -34,8 +48,7 @@ class USScanner:
 
     def load_api_keys(self):
         """加载API密钥"""
-        with open('/home/admin/.openclaw/workspace-stock/strategy/.api-keys.json', 'r') as f:
-            self.keys = json.load(f)
+        self.keys = load_api_keys()
 
         self.finnhub_key = self.keys.get('finnhub', {}).get('api_key', '')
         self.alphavantage_key = self.keys.get('alphavantage', {}).get('api_key', '')
@@ -46,7 +59,7 @@ class USScanner:
         """加载美股成分股(标普500 + 纳斯达克综合指数),去重,可限制数量"""
         try:
             # 加载标普500和纳斯达克综合指数
-            with open('/home/admin/.openclaw/workspace-stock/strategy/us-index-constituents.json', 'r') as f:
+            with (STRATEGY_DIR / 'us-index-constituents.json').open('r', encoding='utf-8') as f:
                 data = json.load(f)
 
             self.sp500 = data.get('sp500', [])
@@ -103,13 +116,13 @@ class USScanner:
 
     def load_config(self):
         """加载策略配置"""
-        with open('/home/admin/.openclaw/workspace-stock/config/us-strategy.json', 'r') as f:
+        with config_path('us-strategy.json').open('r', encoding='utf-8') as f:
             self.config = json.load(f)
 
     def get_buying_power(self):
         """获取账户可用购买力"""
         try:
-            with open('/home/admin/.openclaw/workspace-stock/data/trades.json', 'r') as f:
+            with (DATA_DIR / 'trades.json').open('r', encoding='utf-8') as f:
                 data = json.load(f)
             # 尝试从账户数据获取
             for acc in data.get('accounts', []):
@@ -128,8 +141,7 @@ class USScanner:
         sentiment_map = {}
         try:
             import sqlite3
-            db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(NEWS_DB_PATH)
             cursor = conn.cursor()
             # 查询最近24小时内有新闻的股票平均情绪
             cursor.execute("""
@@ -252,14 +264,24 @@ class USScanner:
                     market_part += 3
             except Exception:
                 pass
+            _opt_ok = False
             try:
                 option_ratio = self.get_option_ratio_realtime()
                 if option_ratio >= 1.2:
                     market_part += 1.5
                 elif option_ratio <= 0.8:
                     market_part -= 1.5
+                _opt_ok = True
             except Exception:
                 pass
+            # 期权P/C获取失败时，用衍生品异动作为备用源
+            if not _opt_ok:
+                try:
+                    deriv = self._check_derivatives_sentiment_fallback()
+                    if deriv:
+                        market_part += deriv
+                except Exception:
+                    pass
             self._sentiment_cache = market_part
             self._sentiment_cache_time = now
             print(f"   📈 市场情绪缓存已更新: 市场级加减 {market_part:+.1f} (TTL=30min)")
@@ -347,84 +369,295 @@ class USScanner:
             print(f"⚠️ 获取期权比例失败: {e}")
         return 1.0  # 默认返回中性值
 
-    def scan_with_finnhub(self, top_n=50):
-        """使用Finnhub扫描"""
-        print(f"  使用数据源: Finnhub")
+    def _check_derivatives_sentiment_fallback(self):
+        """衍生品异动作为期权P/C的备用源（futu-derivatives-anomaly skill）。
+
+        调 futu-derivatives-anomaly 脚本拿衍生品异动文本，
+        按关键词判断看多/看空，返回市场情绪调整值。
+        看多 +1.5 / 看空 -1.5 / 中性或失败 0
+        """
+        import subprocess, json as _json
+        FUTU_DERIV_SCRIPT = str(SKILLS_DIR / 'futu-derivatives-anomaly/scripts/handle_derivatives_anomaly.py')
+        FUTU_PY = str(PYTHON_BIN)
+        _POS = ['看涨期权大单', '做多', '牛证', '看多情绪', '反弹机会', '看涨']
+        _NEG = ['看跌期权大单', '看空情绪', '熊证', '看跌期权活跃度', '阻力位', '看跌']
+        try:
+            proc = subprocess.run(
+                [FUTU_PY, FUTU_DERIV_SCRIPT, 'US.SPY', '--time-range', '7', '--json'],
+                capture_output=True, text=True, timeout=20,
+            )
+            if proc.returncode != 0:
+                return 0
+            stdout = proc.stdout.strip()
+            json_start = stdout.find('{')
+            if json_start < 0:
+                return 0
+            payload, _end = _json.JSONDecoder().raw_decode(stdout[json_start:])
+            data = payload.get('data') or {}
+            if str(data.get('err_code', -1)) != '0':
+                return 0
+            content = data.get('content') or ''
+            if not content:
+                return 0
+            low = content.lower()
+            pos_hits = sum(1 for w in _POS if w in low)
+            neg_hits = sum(1 for w in _NEG if w in low)
+            if neg_hits > pos_hits:
+                print(f"   📉 衍生品异动备用源: 看空 (正{pos_hits}/负{neg_hits})")
+                return -1.5
+            elif pos_hits > neg_hits:
+                print(f"   📈 衍生品异动备用源: 看多 (正{pos_hits}/负{neg_hits})")
+                return 1.5
+            return 0
+        except Exception:
+            return 0
+
+    def _build_quote_candidate(self, symbol, price, prev_close, change_pct, data_source):
+        """把单股报价统一转换为第一层候选结构。"""
+        try:
+            price_float = float(price or 0)
+            prev_close_float = float(prev_close or 0)
+            change_pct_float = float(change_pct or 0)
+        except Exception:
+            return None
+
+        if price_float <= 0 or prev_close_float <= 0 or price_float < 0.1:
+            return None
+
+        stock_sentiment = self.news_sentiment.get(symbol)
+        score = self.calculate_score(price_float, prev_close_float, change_pct_float, stock_sentiment)
+        if score < 50:
+            return None
+
+        index = ""
+        if symbol in self.sp500:
+            index = "标普500"
+        if symbol in self.nasdaq:
+            index += "纳斯达克" if not index else "+纳斯达克"
+
+        return {
+            'symbol': symbol,
+            'name': '',
+            'price': price_float,
+            'prev_close': prev_close_float,
+            'change_pct': round(change_pct_float, 2),
+            'base_score': score,
+            'score': score,
+            'index': index,
+            'data_source': data_source,
+            'timestamp': datetime.now().isoformat()
+        }
+
+    def _fetch_single_quote_finnhub(self, symbol, timeout=2):
+        if not self.finnhub_key:
+            return None
+        url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={self.finnhub_key}'
+        res = requests.get(url, timeout=timeout)
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        return self._build_quote_candidate(symbol, data.get('c'), data.get('pc'), data.get('dp'), 'finnhub')
+
+    def _fetch_single_quote_alphavantage(self, symbol, timeout=2):
+        if not self.alphavantage_key:
+            return None
+        url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={self.alphavantage_key}'
+        res = requests.get(url, timeout=timeout)
+        if res.status_code != 200:
+            return None
+        quote = res.json().get('Global Quote', {})
+        raw_change = str(quote.get('10. change percent', '0')).replace('%', '')
+        return self._build_quote_candidate(
+            symbol,
+            quote.get('05. price'),
+            quote.get('08. previous close'),
+            raw_change,
+            'alphavantage_single'
+        )
+
+    def _fetch_single_quote_yfinance(self, symbol, timeout=2):
+        # yfinance 没有简单的 per-request timeout 参数，这里用 query1 chart 接口做单股兜底。
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
+        res = requests.get(url, params={'range': '1d', 'interval': '1d'}, timeout=timeout)
+        if res.status_code != 200:
+            return None
+        result = (res.json().get('chart', {}).get('result') or [None])[0]
+        if not result:
+            return None
+        meta = result.get('meta', {})
+        price = meta.get('regularMarketPrice')
+        prev_close = meta.get('previousClose') or meta.get('chartPreviousClose')
+        if price is None or prev_close in (None, 0):
+            return None
+        change_pct = (float(price) - float(prev_close)) / float(prev_close) * 100
+        return self._build_quote_candidate(symbol, price, prev_close, change_pct, 'yfinance_single')
+
+    def _fetch_single_quote_longbridge(self, symbol, timeout=2):
+        if not self.longbridge_token:
+            return None
+        url = 'https://openapi.longbridgeapp.com/v1/quote'
+        headers = {
+            'Authorization': f'Bearer {self.longbridge_token}',
+            'Content-Type': 'application/json',
+        }
+        params = {
+            'symbol': [symbol],
+            'what': 'latest_price,previous_close,change_percent',
+        }
+        res = requests.get(url, headers=headers, params=params, timeout=timeout)
+        if res.status_code != 200:
+            return None
+        for item in res.json().get('data', []):
+            quote = item.get('quote', {})
+            price = quote.get('latest_price', {}).get('value')
+            prev_close = quote.get('previous_close', {}).get('value')
+            change_pct = quote.get('change_percent', {}).get('value')
+            candidate = self._build_quote_candidate(symbol, price, prev_close, change_pct, 'longbridge_single')
+            if candidate:
+                return candidate
+        return None
+
+    def _get_futu_quote_ctx(self):
+        with self._futu_lock:
+            if self._futu_quote_disabled:
+                return None
+            if self.quote_ctx:
+                return self.quote_ctx
+            try:
+                from futu import OpenQuoteContext
+                self.quote_ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
+                return self.quote_ctx
+            except Exception as e:
+                self._futu_quote_disabled = True
+                print(f"      ⚠️ Futu行情源不可用，本轮不再尝试: {e}")
+                return None
+
+    def _fetch_single_quote_futu(self, symbol, timeout=2):
+        ctx = self._get_futu_quote_ctx()
+        if not ctx:
+            return None
+        try:
+            from futu import RET_OK
+            full_symbol = symbol if str(symbol).startswith('US.') else f'US.{symbol}'
+            # Futu OpenQuoteContext 不保证线程安全；只允许一个工作线程同时调用。
+            with self._futu_lock:
+                ret, snapshot = ctx.get_market_snapshot([full_symbol])
+            if ret != RET_OK or snapshot is None or len(snapshot) == 0:
+                return None
+            row = snapshot.iloc[0]
+            price = row.get('last_price') or row.get('cur_price')
+            prev_close = row.get('prev_close_price') or row.get('prev_close')
+            change_pct = row.get('change_rate')
+            if change_pct is None and price and prev_close:
+                change_pct = (float(price) - float(prev_close)) / float(prev_close) * 100
+            return self._build_quote_candidate(symbol.replace('US.', ''), price, prev_close, change_pct, 'futu')
+        except Exception:
+            return None
+
+    def fetch_single_quote_with_fallbacks(self, symbol, per_source_timeout=2, per_symbol_budget=10):
+        """单股逐源兜底：所有可用源都试过才放弃，但受单股总预算限制。"""
+        started = time.time()
+        sources = (
+            ('finnhub', self._fetch_single_quote_finnhub),
+            ('alphavantage', self._fetch_single_quote_alphavantage),
+            ('yfinance', self._fetch_single_quote_yfinance),
+            ('longbridge', self._fetch_single_quote_longbridge),
+            ('futu', self._fetch_single_quote_futu),
+        )
+        for source_name, fetcher in sources:
+            if time.time() - started >= per_symbol_budget:
+                break
+            try:
+                quote = fetcher(symbol, timeout=per_source_timeout)
+                if quote:
+                    if source_name != 'finnhub':
+                        print(f"      ↪ {symbol}: Finnhub失败，使用{source_name}兜底")
+                    return quote
+            except Exception:
+                continue
+        return None
+
+    def scan_with_finnhub(self, top_n=50, time_budget_seconds=2040, max_workers=2):
+        """使用Finnhub扫描。第一层动态预算，默认最多约34分钟，给第二层保底25分钟。
+        支持多线程并发扫描加速（max_workers），超时后返回已扫到的结果。"""
+        print(f"  使用数据源: Finnhub (时间预算 {time_budget_seconds//60} 分钟, 并发{max_workers})")
 
         results = []
         total = len(self.stocks)
+        if total == 0:
+            return results
+        start_time = time.time()
+        stop_event = threading.Event()
+        progress = {'done': 0}
+        progress_lock = threading.Lock()
 
-        for i, stock in enumerate(self.stocks):
-            try:
-                symbol = stock['symbol']
-                if (i + 1) % 100 == 0:
-                    print(f"    进度: {i+1}/{total}")
+        def worker(chunk):
+            """工作线程：扫描分配到的股票块，受 stop_event 控制提前退出。"""
+            local_results = []
+            for stock in chunk:
+                if stop_event.is_set():
+                    break
+                try:
+                    symbol = stock['symbol']
+                    candidate = self.fetch_single_quote_with_fallbacks(
+                        symbol,
+                        per_source_timeout=2,
+                        per_symbol_budget=10,
+                    )
+                    if candidate:
+                        local_results.append(candidate)
+                except Exception:
+                    continue
+                time.sleep(0.05)  # 保持 API 礼貌，避免触发限流
+                with progress_lock:
+                    progress['done'] += 1
+                    done = progress['done']
+                if done % 100 == 0:
+                    elapsed = time.time() - start_time
+                    print(f"    进度: {done}/{total} ({elapsed/60:.1f}分钟)")
+            return local_results
 
-                url = f'https://finnhub.io/api/v1/quote?symbol={symbol}&token={self.finnhub_key}'
-                res = requests.get(url, timeout=10)
+        # 将股票池均匀切片为 max_workers 块（轮流分配，保证两类指数均匀）
+        chunks = [self.stocks[i::max_workers] for i in range(max_workers)]
 
-                if res.status_code == 200:
-                    data = res.json()
-                    price = data.get('c', 0)
-                    prev_close = data.get('pc', 0)
-                    change_pct = data.get('dp', 0)
-
-                    # 过滤无效数据
-                    if price is None or price == 0:
-                        continue
-                    if prev_close is None or prev_close == 0:
-                        continue
-
-                    # 过滤没有成交量的股票(价格过低通常是仙股或无交易)
-                    if price < 0.1:
-                        continue
-
-                    price_float = float(price)
-                    prev_close_float = float(prev_close)
-                    change_pct_float = float(change_pct) if change_pct else 0
-
-                    stock_sentiment = self.news_sentiment.get(symbol)
-                    score = self.calculate_score(price_float, prev_close_float, change_pct_float, stock_sentiment)
-
-                    # 判断所属指数
-                    index = ""
-                    if symbol in self.sp500:
-                        index = "标普500"
-                    if symbol in self.nasdaq:
-                        index += "纳斯达克" if not index else "+纳斯达克"
-
-                    if score >= 50:
-                        results.append({
-                            'symbol': symbol,
-                            'name': '',
-                            'price': price_float,
-                            'prev_close': prev_close_float,
-                            'change_pct': round(change_pct_float, 2),
-                            'base_score': score,
-                            'score': score,
-                            'index': index,
-                            'timestamp': datetime.now().isoformat()
-                        })
-
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(worker, chunk) for chunk in chunks]
+            # 监控总预算：超时就通知所有工作线程停止
+            while not all(f.done() for f in futures):
+                if time.time() - start_time > time_budget_seconds:
+                    stop_event.set()
+                    break
                 time.sleep(0.1)
+            for f in futures:
+                try:
+                    results.extend(f.result())
+                except Exception:
+                    pass
 
-            except Exception as e:
-                continue
-
+        elapsed = time.time() - start_time
+        scanned = progress['done']
+        print(f"    Finnhub扫描完成: {len(results)}/{total}只有效 "
+              f"({scanned}只已扫描, {elapsed/60:.1f}分钟)")
         return results
 
-    def scan_with_alphavantage(self, top_n=50):
-        """使用AlphaVantage扫描(备用)"""
-        print(f"  使用数据源: AlphaVantage(备用)")
+    def scan_with_alphavantage(self, top_n=50, time_budget_seconds=1200):
+        """使用AlphaVantage扫描(备用)。时间预算20分钟。"""
+        print(f"  使用数据源: AlphaVantage(备用, 时间预算 {time_budget_seconds//60} 分钟)")
 
         results = []
         total = len(self.stocks)
+        start_time = time.time()
 
         for i, stock in enumerate(self.stocks):
+            elapsed = time.time() - start_time
+            if elapsed > time_budget_seconds:
+                print(f"    ⏰ 时间预算耗尽({elapsed/60:.1f}分钟)，已扫描{i}/{total}只")
+                break
+
             try:
                 symbol = stock['symbol']
                 if (i + 1) % 50 == 0:
-                    print(f"    进度: {i+1}/{total}")
+                    print(f"    进度: {i+1}/{total} ({elapsed/60:.1f}分钟)")
 
                 url = f'https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={self.alphavantage_key}'
                 res = requests.get(url, timeout=10)
@@ -554,6 +787,13 @@ class USScanner:
                                         'data_source': 'yfinance',
                                         'price_type': price_type,
                                         'market_cap': info.get('marketCap'),
+                                        'trailing_pe': info.get('trailingPE'),
+                                        'forward_pe': info.get('forwardPE'),
+                                        'revenue_growth': (info.get('revenueGrowth') * 100 if isinstance(info.get('revenueGrowth'), (int, float)) else None),
+                                        'earnings_growth': (info.get('earningsGrowth') * 100 if isinstance(info.get('earningsGrowth'), (int, float)) else None),
+                                        'profit_margin': (info.get('profitMargins') * 100 if isinstance(info.get('profitMargins'), (int, float)) else None),
+                                        'trailing_eps': info.get('trailingEps'),
+                                        'sector': info.get('sector', ''),
                                         'volume': info.get('regularMarketVolume'),
                                         'timestamp': datetime.now().isoformat()
                                     })
@@ -625,6 +865,13 @@ class USScanner:
                                         'index': index,
                                         'data_source': 'yfinance_single',
                                         'market_cap': info.get('marketCap'),
+                                        'trailing_pe': info.get('trailingPE'),
+                                        'forward_pe': info.get('forwardPE'),
+                                        'revenue_growth': (info.get('revenueGrowth') * 100 if isinstance(info.get('revenueGrowth'), (int, float)) else None),
+                                        'earnings_growth': (info.get('earningsGrowth') * 100 if isinstance(info.get('earningsGrowth'), (int, float)) else None),
+                                        'profit_margin': (info.get('profitMargins') * 100 if isinstance(info.get('profitMargins'), (int, float)) else None),
+                                        'trailing_eps': info.get('trailingEps'),
+                                        'sector': info.get('sector', ''),
                                         'volume': info.get('regularMarketVolume'),
                                         'timestamp': datetime.now().isoformat()
                                     })
@@ -744,8 +991,14 @@ class USScanner:
         print(f"✅ TinkClaw扫描完成: 找到 {len(results)} 个AI信号机会")
         return results
 
-    def scan(self, top_n=50):
+    def scan(self, top_n=50, max_workers=2):
         """扫描美股市场"""
+        self._scan_max_workers = max_workers
+        total_budget_seconds = 59 * 60
+        min_layer2_seconds = 25 * 60
+        scan_started_at = time.time()
+        self._scan_deadline = scan_started_at + total_budget_seconds
+        layer1_budget_seconds = max(60, total_budget_seconds - min_layer2_seconds)
         print(f"\n{'='*60}")
         print(f"🇺🇸 美股扫描器 v2.0")
         print(f"{'='*60}")
@@ -761,7 +1014,7 @@ class USScanner:
 
         print(f"✅ 当前扫描时段: {reason}\n")
 
-        # 先获取新闻情绪(四源共振-国际资讯35%)
+        # 先获取新闻情绪(五源共振-国际资讯25%)
         self.news_sentiment = self.get_news_sentiment()
         sentiment_count = len(self.news_sentiment)
         if sentiment_count > 0:
@@ -771,7 +1024,7 @@ class USScanner:
 
         # 尝试主数据源 - Finnhub(快,实时)
         try:
-            results = self.scan_with_finnhub(top_n)
+            results = self.scan_with_finnhub(top_n, time_budget_seconds=layer1_budget_seconds, max_workers=max_workers)
             self.data_source = 'finnhub'
             print(f"✅ Finnhub数据源成功")
         except Exception as e:
@@ -817,15 +1070,25 @@ class USScanner:
                             return []
 
         results.sort(key=lambda x: x['base_score'], reverse=True)
-        top_results = results[:top_n]
+        # 2026-07-01 east 修改：去掉 top_n 截断，所有符合 base_score >= 50 的候选都进入 save_results 跑五源深度评分
+        all_candidates = results
 
-        self.save_results(top_results)
+        self.save_results(all_candidates)
+
+        display_results = [
+            r for r in all_candidates
+            if r.get('final_score', r.get('score', r.get('base_score', 0))) >= 65
+        ]
+        display_results.sort(
+            key=lambda x: x.get('final_score', x.get('score', x.get('base_score', 0))),
+            reverse=True,
+        )
 
         print(f"\n✅ 扫描完成: 扫描{len(self.stocks)}只,获得{len(results)}个有效机会")
-        print(f"📊 高评分股票(≥70分): {len([r for r in results if r['base_score'] >= 70])}只")
+        print(f"📊 最终高评分股票(≥70分): {len([r for r in display_results if r.get('final_score', r.get('score', 0)) >= 70])}只")
         print(f"📡 数据源: {self.data_source}")
 
-        return top_results
+        return display_results[:top_n]
 
     def _flush_opportunities(self, analyzed, partial=True):
         """增量保存 us-opportunities.json。任何时刻被调用都能安全落盘。
@@ -854,7 +1117,7 @@ class USScanner:
             'opportunities': valid,
         }
 
-        path = '/home/admin/.openclaw/workspace-stock/data/us-opportunities.json'
+        path = DATA_DIR / 'us-opportunities.json'
         tmp_path = path + '.tmp'
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -896,15 +1159,10 @@ class USScanner:
         min_position = 5000
         skip_llm = buying_power < min_position
 
-        # 🎯 四源补算覆盖候选池；LLM 仍只处理评分最高的前 10 只（剩下的直接用基础分，避免烧token）
-        TOP_LLM_N = 10
-        # results 已按 base_score 倒序，拍一下前几只的 symbol 作为名单
-        top_llm_set = {
-            (r.get('symbol') or '').replace('US.', '')
-            for r in results[:TOP_LLM_N]
-        }
+        # 🎯 五源补算覆盖候选池；LLM 在五源评分完成后再处理真实评分 Top 20
+        TOP_LLM_N = 20
         if not skip_llm:
-            print(f"   🧠 LLM 仅处理评分 Top {TOP_LLM_N}: {sorted(s for s in top_llm_set if s)[:TOP_LLM_N]}")
+            print(f"   🧠 LLM 将在五源评分后处理真实评分 Top {TOP_LLM_N}")
 
         if skip_llm:
             print(f"   ⚠️ 账户购买力不足(${buying_power:,.0f} < ${min_position:,}),跳过LLM分析")
@@ -919,7 +1177,112 @@ class USScanner:
         else:
             print(f"   📰 新闻情绪: 无数据")
 
+        # 第二层时间预算：使用总预算剩余时间。
+        # scan() 总预算 59 分钟，第一层动态运行但给第二层保底 25 分钟；cron 60 分钟只做硬上限。
+        layer2_start = time.time()
+        deadline = getattr(self, '_scan_deadline', layer2_start + 25 * 60)
+        layer2_budget = max(0, int(deadline - layer2_start))
+        print(f"   ⏱️ 第二层剩余预算: {layer2_budget//60}分{layer2_budget%60}秒")
+
+        # === 第二层 Phase 1: 并行跑五源评分（最耗时，每个候选 5 次 Futu API）===
+        # 先并行把 score_all 算完，Phase 2 再顺序做新闻情绪注入/LLM/flush，避免串行瓶颈
+        def _prefetch_fs(candidate):
+            symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
+            if candidate.get('score', 0) < 70:
+                return symbol_raw, None
+            try:
+                sys.path.insert(0, str(STRATEGY_DIR))
+                from four_source_scorer import score_all as _fs_score_all
+                fs = _fs_score_all(symbol_raw, 'us')
+                # 社区百分比 + 资金原始字段也一并并行预取（辅助字段，失败不影响主流程）
+                try:
+                    from four_source_scorer import _community_futu_comment as _futu_com
+                    futu_com = _futu_com(symbol_raw, 25)
+                    if futu_com.get('available'):
+                        fs['_community_raw'] = futu_com.get('raw', {})
+                        fs['_community_score'] = futu_com.get('score', 0)
+                except Exception:
+                    pass
+                return symbol_raw, fs
+            except Exception as e:
+                print(f"   ⚠️ {symbol_raw} 五源评分失败: {e}")
+                return symbol_raw, None
+
+        fs_map = {}
+        eligible = [c for c in results if c.get('score', 0) >= 70]
+        layer2_workers = getattr(self, '_scan_max_workers', 2)
+        if layer2_budget >= 12 * 60:
+            finalize_reserve = min(6 * 60, max(60, layer2_budget // 4))
+        else:
+            finalize_reserve = max(2, layer2_budget // 3)
+        prefetch_deadline = deadline - finalize_reserve
+        print(f"   🔄 并行五源评分中: {len(eligible)}只候选 (并发{layer2_workers}, 预留收尾{finalize_reserve//60}分{finalize_reserve%60}秒)")
+        _ex = ThreadPoolExecutor(max_workers=layer2_workers)
+        pending = {_ex.submit(_prefetch_fs, candidate) for candidate in eligible}
+        try:
+            while pending:
+                remaining = prefetch_deadline - time.time()
+                if remaining <= 0:
+                    print(f"   ⏰ 五源预取时间到，已完成{len(fs_map)}只，取消{len(pending)}个未完成任务，进入LLM/保存阶段")
+                    break
+                done, pending = wait(
+                    pending,
+                    timeout=min(1.0, remaining),
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in done:
+                    try:
+                        _sym, _fs = future.result()
+                        if _fs is not None:
+                            fs_map[_sym] = _fs
+                    except Exception:
+                        pass
+        finally:
+            for future in pending:
+                future.cancel()
+            # 不等待仍处于网络调用中的线程；cron 的60分钟仍是最终硬上限。
+            _ex.shutdown(wait=False, cancel_futures=True)
+
+        llm_ranked_symbols = []
+        if not skip_llm:
+            ranked_for_llm = []
+            for candidate in results:
+                symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
+                fs = fs_map.get(symbol_raw)
+                if not fs:
+                    continue
+                score_for_rank = fs['score_total'] if fs['available_count'] >= 3 else int(candidate.get('score', 70) * 0.8)
+                ranked_for_llm.append((score_for_rank, symbol_raw))
+            ranked_for_llm.sort(key=lambda x: x[0], reverse=True)
+            llm_ranked_symbols = [sym for _, sym in ranked_for_llm[:TOP_LLM_N]]
+            print(f"   🧠 LLM 实际处理五源后 Top {TOP_LLM_N}: {llm_ranked_symbols}")
+        top_llm_set = set(llm_ranked_symbols)
+        llm_tech = None
+        if top_llm_set:
+            try:
+                from technical_indicators_us import USTechIndicators
+                llm_tech = USTechIndicators()
+            except Exception as e:
+                print(f"   ⚠️ LLM技术摘要模块不可用: {e}")
+        if top_llm_set:
+            llm_order = {symbol: idx for idx, symbol in enumerate(llm_ranked_symbols)}
+            top_candidates = sorted(
+                [c for c in results if (c.get('symbol') or '').replace('US.', '') in top_llm_set],
+                key=lambda c: llm_order.get((c.get('symbol') or '').replace('US.', ''), len(llm_order)),
+            )
+            remaining_candidates = [
+                c for c in results if (c.get('symbol') or '').replace('US.', '') not in top_llm_set
+            ]
+            results = top_candidates + remaining_candidates
+
         for idx, candidate in enumerate(results):
+            # 第二层总截止检查：五源预取已预留收尾时间，这里只防止越过 cron 硬上限。
+            remaining_total = deadline - time.time()
+            stop_guard = 10 if layer2_budget >= 60 else 1
+            if remaining_total <= stop_guard:
+                l2_elapsed = time.time() - layer2_start
+                print(f"   ⏰ 第二层总预算接近耗尽({l2_elapsed/60:.1f}分钟)，已分析{len(llm_analyzed)}只，flush保存")
+                break
             try:
                 # 注入新闻情绪到候选股票
                 symbol = candidate.get('symbol', '').replace('US.', '')
@@ -935,56 +1298,85 @@ class USScanner:
                         base = max(0, base - 10)
                     candidate['base_score'] = base
                     candidate['score'] = base
-                # 候选池内统一跑真实四源评分；LLM 仍只处理 Top10 名单
+                # 候选池内统一跑真实五源评分；LLM 仍只处理 TopN 名单
+                # 五源评分已在 Phase 1 并行算完，这里直接从 fs_map 取，不再串行调 API
                 symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
-                if candidate.get('score', 0) >= 70:
-                    # 2026-06-24 east 改为：候选池统一跑真实四源评分（不是硬拆）
-                    try:
-                        sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
-                        from four_source_scorer import score_all as _fs_score_all
-                        fs = _fs_score_all(symbol_raw, 'us')
-                        # 将真实分项写回 candidate：供 auto-trader 通知直接使用，不再硬拆
-                        candidate['score_news'] = fs['score_news']
-                        candidate['score_announce'] = fs['score_announce']
-                        candidate['score_community'] = fs['score_community']
-                        candidate['score_institution'] = fs['score_institution']
-                        candidate['available_news'] = fs['available_news']
-                        candidate['available_announce'] = fs['available_announce']
-                        candidate['available_community'] = fs['available_community']
-                        candidate['available_institution'] = fs['available_institution']
-                        candidate['evidence_news'] = fs['evidence_news']
-                        candidate['evidence_announce'] = fs['evidence_announce']
-                        candidate['evidence_community'] = fs['evidence_community']
-                        candidate['evidence_institution'] = fs['evidence_institution']
-                        candidate['four_source_total'] = fs['score_total']
-                        candidate['four_source_available_count'] = fs['available_count']
-                        print(f"   📊 {symbol_raw} 四源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']} (总{fs['score_total']}, 覆盖{fs['available_count']}/4)")
+                fs = fs_map.get(symbol_raw)
+                if fs is not None:
+                    # 将真实分项写回 candidate：供 auto-trader 通知直接使用，不再硬拆
+                    candidate['score_news'] = fs['score_news']
+                    candidate['score_announce'] = fs['score_announce']
+                    candidate['score_community'] = fs['score_community']
+                    candidate['score_institution'] = fs['score_institution']
+                    candidate['score_capital'] = fs['score_capital']
+                    candidate['available_news'] = fs['available_news']
+                    candidate['available_announce'] = fs['available_announce']
+                    candidate['available_community'] = fs['available_community']
+                    candidate['available_institution'] = fs['available_institution']
+                    candidate['available_capital'] = fs['available_capital']
+                    candidate['evidence_news'] = fs['evidence_news']
+                    candidate['evidence_announce'] = fs['evidence_announce']
+                    candidate['evidence_community'] = fs['evidence_community']
+                    candidate['evidence_institution'] = fs['evidence_institution']
+                    candidate['evidence_capital'] = fs['evidence_capital']
+                    candidate['five_source_total'] = fs['score_total']
+                    candidate['four_source_total'] = fs['score_total']  # 兼容旧字段
+                    candidate['five_source_available_count'] = fs['available_count']
+                    candidate['four_source_available_count'] = fs['available_count']  # 兼容旧字段
 
-                        # 2026-06-24 east 关键：让扫描器评分跟通知一致
-                        # 覆盖 >=3 个维度时：用真四源总分接管，卸掊 base_score
-                        # 覆盖 <3 时：降级，用 base_score × 0.8 避免数据不足的股被狂推
-                        if fs['available_count'] >= 3:
-                            candidate['base_score_legacy'] = candidate.get('score', 70)
-                            candidate['score'] = fs['score_total']
-                            candidate['scoring_mode'] = 'four_source_real'
-                            print(f"   ✅ {symbol_raw} 采用真四源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
-                        else:
-                            candidate['base_score_legacy'] = candidate.get('score', 70)
-                            candidate['score'] = int(candidate.get('score', 70) * 0.8)
-                            candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/4 <3)'
-                            print(f"   ⚠️ {symbol_raw} 覆盖不足，降级为 base_score×0.8 = {candidate['score']}")
-                    except Exception as e:
-                        print(f"   ⚠️ {symbol_raw} 四源评分失败: {e}")
+                    # 第一层社区情绪：从 Phase 1 预取的原始百分比写回 candidate
+                    _com_raw = fs.pop('_community_raw', None)
+                    if _com_raw:
+                        candidate['community_bull_pct'] = _com_raw.get('bull_pct', 0)
+                        candidate['community_bear_pct'] = _com_raw.get('bear_pct', 0)
+                        candidate['community_neutral_pct'] = 1 - _com_raw.get('bull_pct', 0) - _com_raw.get('bear_pct', 0)
+                        candidate['community_post_count'] = _com_raw.get('count', 0)
+                        candidate['community_futu_score'] = fs.pop('_community_score', 0)
+
+                    # 第一层资金异动：从 score_all 返回的 raw 读原始数据写回 candidate
+                    try:
+                        cap_raw = fs.get('raw', {}).get('capital', {})
+                        if cap_raw:
+                            candidate['capital_direction'] = cap_raw.get('direction', '')
+                            candidate['capital_pos_hits'] = cap_raw.get('pos_hits', 0)
+                            candidate['capital_neg_hits'] = cap_raw.get('neg_hits', 0)
+                            candidate['capital_content'] = cap_raw.get('content', '')
+                            candidate['capital_futu_score'] = fs.get('score_capital', 0)
+                    except Exception as _e:
+                        pass  # 资金异动原始字段是辅助字段，失败不影响主流程
+
+                    print(f"   📊 {symbol_raw} 五源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']}/资金{fs['score_capital']} (总{fs['score_total']}, 覆盖{fs['available_count']}/5)")
+
+                    # 2026-06-24 east 关键：让扫描器评分跟通知一致
+                    # 覆盖 >=3 个维度时：用真五源总分接管，卸掊 base_score
+                    # 覆盖 <3 时：降级，用 base_score × 0.8 避免数据不足的股被狂推
+                    if fs['available_count'] >= 3:
+                        candidate['base_score_legacy'] = candidate.get('score', 70)
+                        candidate['score'] = fs['score_total']
+                        candidate['scoring_mode'] = 'five_source_real'
+                        print(f"   ✅ {symbol_raw} 采用真五源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
+                    else:
+                        candidate['base_score_legacy'] = candidate.get('score', 70)
+                        candidate['score'] = int(candidate.get('score', 70) * 0.8)
+                        candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/5 <3)'
+                        print(f"   ⚠️ {symbol_raw} 覆盖不足，降级为 base_score×0.8 = {candidate['score']}")
 
                     # 购买力不足时跳过LLM分析,直接用基础评分
                     if skip_llm:
                         candidate['final_score'] = candidate.get('score', 70)
                         candidate['llm_adjust'] = 0
                         candidate['llm_reason'] = '购买力不足,跳过LLM分析'
-                    else:
+                    elif symbol_raw in top_llm_set:
+                        # 2026-07-01 east 保留：仅 TopN 跑 LLM，控制token消耗，五源评分已对所有≥70分候选统一计算
                         try:
-                            sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/strategy')
+                            sys.path.insert(0, str(STRATEGY_DIR))
                             from llm_stock_analyzer import analyze_stock
+
+                            if llm_tech is not None:
+                                try:
+                                    candidate.update(llm_tech.get_llm_snapshot(symbol_raw))
+                                except Exception as e:
+                                    print(f"   ⚠️ {symbol_raw} LLM技术摘要失败: {e}")
 
                             market_data = {
                                 'symbol': candidate.get('symbol', ''),
@@ -997,7 +1389,38 @@ class USScanner:
                                 'ma50': candidate.get('ma50', 0),
                                 'volume_ratio': candidate.get('volume_ratio', 1.0),
                                 'atr': candidate.get('atr', 0),
-                                'sentiment': candidate.get('sentiment', '中性')
+                                'macd': candidate.get('macd'),
+                                'macd_signal': candidate.get('macd_signal'),
+                                'macd_state': candidate.get('macd_state', ''),
+                                'ma20_slope_pct': candidate.get('ma20_slope_pct'),
+                                'return_5d_pct': candidate.get('return_5d_pct'),
+                                'return_20d_pct': candidate.get('return_20d_pct'),
+                                'distance_20d_high_pct': candidate.get('distance_20d_high_pct'),
+                                'intraday_drawdown_pct': candidate.get('intraday_drawdown_pct'),
+                                'price_above_ma20': candidate.get('price_above_ma20'),
+                                'price_above_ma50': candidate.get('price_above_ma50'),
+                                'market_cap': candidate.get('market_cap'),
+                                'trailing_pe': candidate.get('trailing_pe'),
+                                'forward_pe': candidate.get('forward_pe'),
+                                'revenue_growth': candidate.get('revenue_growth'),
+                                'earnings_growth': candidate.get('earnings_growth'),
+                                'profit_margin': candidate.get('profit_margin'),
+                                'trailing_eps': candidate.get('trailing_eps'),
+                                'sector': candidate.get('sector', ''),
+                                'sentiment': candidate.get('sentiment', '中性'),
+                                'score_news': candidate.get('score_news', 0),
+                                'score_announce': candidate.get('score_announce', 0),
+                                'score_community': candidate.get('score_community', 0),
+                                'score_institution': candidate.get('score_institution', 0),
+                                'score_capital': candidate.get('score_capital', 0),
+                                'evidence_announce': candidate.get('evidence_announce', ''),
+                                'evidence_community': candidate.get('evidence_community', ''),
+                                'evidence_institution': candidate.get('evidence_institution', ''),
+                                'evidence_capital': candidate.get('evidence_capital', ''),
+                                'capital_direction': candidate.get('capital_direction', ''),
+                                'community_bull_pct': candidate.get('community_bull_pct', 0),
+                                'community_bear_pct': candidate.get('community_bear_pct', 0),
+                                'community_post_count': candidate.get('community_post_count', 0),
                             }
 
                             llm_result = analyze_stock(candidate.get('symbol'), market_data)
@@ -1005,6 +1428,8 @@ class USScanner:
                             candidate['final_score'] = llm_result.get('final_score', candidate.get('score'))
                             candidate['llm_adjust'] = llm_result.get('score_adjust', 0)
                             candidate['llm_reason'] = llm_result.get('llm_reason', '')
+                            candidate['llm_passed'] = bool(llm_result.get('passed', True))
+                            candidate['llm_status'] = llm_result.get('llm_status', 'parsed')
 
                             print(f"   🧠 {candidate.get('symbol')}: 基础{candidate.get('score')} → LLM最终{candidate.get('final_score')}")
 
@@ -1012,16 +1437,23 @@ class USScanner:
                             print(f"   ⚠️ LLM分析失败: {e}")
                             candidate['final_score'] = candidate.get('score', 70)
                             candidate['llm_adjust'] = 0
-                            candidate['llm_reason'] = 'LLM分析失败'
-                            candidate['llm_passed'] = False  # LLM未通过
+                            candidate['llm_reason'] = f'LLM分析失败，禁止交易: {e}'
+                            candidate['llm_passed'] = False
+                            candidate['llm_status'] = 'failed'
+                    else:
+                        # 非TopN候选，直接用五源评分作为最终分，不跑LLM省token
+                        candidate['final_score'] = candidate.get('score', 70)
+                        candidate['llm_adjust'] = 0
+                        candidate['llm_reason'] = f'非Top{TOP_LLM_N}，跳过LLM，直接采用五源评分'
+                        candidate['llm_passed'] = True
                 else:
-                    candidate['final_score'] = candidate.get('score', 70)
+                    candidate['final_score'] = 0 if candidate.get('score', 0) >= 70 else candidate.get('score', 0)
                     candidate['llm_adjust'] = 0
                     if candidate.get('score', 0) < 70:
                         candidate['llm_reason'] = ''
                     else:
-                        candidate['llm_reason'] = f'评分未进入 Top{TOP_LLM_N}，跳过 LLM'
-                    candidate['llm_passed'] = True  # 未达到LLM分析阈值,默认通过
+                        candidate['llm_reason'] = '五源评分未完成，禁止进入交易候选'
+                    candidate['llm_passed'] = candidate.get('score', 0) < 70  # 需要五源的候选未完成时不允许通过
 
                 # 只保留最终评分>=65的
                 if candidate.get('final_score', 0) >= 65:
@@ -1030,7 +1462,10 @@ class USScanner:
                 print(f"   ⚠️ 处理{candidate.get('symbol','UNK')}异常: {e}")
 
             # === 增量保存：每 20 只 flush 一次，被kill也不会丢太多 ===
-            if (idx + 1) % 20 == 0:
+            if top_llm_set and (idx + 1) == len(top_llm_set):
+                self._flush_opportunities(llm_analyzed, partial=True)
+                print(f"   ⚡ Top {len(top_llm_set)} LLM结果已提前发布")
+            elif (idx + 1) % 20 == 0:
                 self._flush_opportunities(llm_analyzed, partial=True)
 
         results = llm_analyzed
@@ -1038,7 +1473,7 @@ class USScanner:
         # ===== LLM分析完成后,直接触发交易 =====
         high_score_opportunities = [
             c for c in results 
-            if c.get('llm_passed', True) and c.get('final_score', 0) >= 80
+            if c.get('llm_passed', True) and c.get('final_score', 0) >= 75
         ]
 
         # 非交易时段高分信号通知（>=90分）
@@ -1063,7 +1498,7 @@ class USScanner:
         try:
             # 导入自动交易模块(文件名是auto-trader.py)
             import importlib.util
-            spec = importlib.util.spec_from_file_location("auto_trader", "/home/admin/.openclaw/workspace-stock/strategy/auto-trader.py")
+            spec = importlib.util.spec_from_file_location("auto_trader", STRATEGY_DIR / "auto-trader.py")
             auto_trader_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(auto_trader_module)
             AutoTrader = auto_trader_module.AutoTrader
@@ -1109,22 +1544,20 @@ class USScanner:
                     print(f"   ⏭️ {symbol}: 技术指标不满足")
                     continue
 
-                # 计算仓位 & 订单金额（必须先算出 order_value 才能 check_position_limits）
-                position_size = account['total_assets'] * trader.config.get('position_size', 0.12)
-                quantity = int(position_size / price) if price > 0 else 0
-                order_value = quantity * price
-
-                if quantity <= 0:
-                    print(f"   ⏭️ {symbol}: 计算出的股数为 0，跳过")
+                order_plan = trader.prepare_buy_order(account, futu_symbol, price, score, market='us')
+                if not order_plan.get('can_buy'):
+                    print(f"   ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                     continue
 
-                # 检查仓位限制（使用正确的 3 参调用：account, symbol, order_value）
-                position_check, position_reason = trader.check_position_limits(account, symbol, order_value, market='us')
-                if not position_check.get('can_add_position', False):
-                    print(f"   ⏭️ {symbol}: {position_reason or '仓位已满'}")
-                    break
+                quantity = order_plan['quantity']
 
                 if quantity > 0:
+                    print(
+                        f"   💰 {symbol}: 评分仓位{order_plan['base_pct']*100:.1f}% "
+                        f"· 市场总仓位上限{order_plan['total_limit_pct']:.0f}% "
+                        f"→ 实际金额${order_plan['order_value']:,.2f}, "
+                        f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
+                    )
                     print(f"\n   🎯 准备买入 {symbol}")
                     print(f"      价格: ${price:.2f}")
                     print(f"      数量: {quantity}股")
@@ -1137,6 +1570,7 @@ class USScanner:
                         skip_llm=True,  # 跳过重复LLM分析
                         score=score,
                         reasons=entry_reasons,
+                        opp=opp,
                     )
 
                     if success:
@@ -1155,44 +1589,6 @@ class USScanner:
             print(f"   ❌ 直接交易失败: {e}")
             import traceback
             traceback.print_exc()
-
-    def print_top_results(self, results, n=10):
-        """打印Top N结果"""
-        print(f"\n📊 美股Top {n}高评分股票:")
-        print("-" * 80)
-        print(f"{'代码':<10} {'价格':>10} {'涨幅':>8} {'评分':>6} {'指数':<15}")
-        print("-" * 80)
-
-        for r in results[:n]:
-            print(f"{r['symbol']:<10} ${r['price']:>8.2f} {r['change_pct']:>+7.2f}% {r['base_score']:>5}分 {r['index']:<15}")
-
-
-if __name__ == '__main__':
-    # 导入交易日历
-    import sys
-    import os
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/..')
-
-    try:
-        from trading_calendar import TradingCalendar
-        calendar = TradingCalendar()
-
-        # 检查是否为美股交易日
-        is_trading_day, reason = calendar.is_us_trading_day()
-
-        if not is_trading_day:
-            print(f"⏸️ 美股非交易日: {reason}")
-            print(f"💡 跳过扫描")
-            sys.exit(0)
-    except Exception as e:
-        print(f"⚠️ 交易日历检查失败: {e}")
-        print("💡 继续执行扫描...")
-
-    # 执行扫描
-    scanner = USScanner()  # 不传递scan_limit参数,扫描所有股票
-    results = scanner.scan(top_n=50)  # top_n只限制输出结果数量,不限制扫描股票数量
-    if results:
-        scanner.print_top_results(results, n=15)
 
     def scan_with_longbridge(self, top_n=50):
         """使用长桥获取数据(备用数据源)"""
@@ -1288,3 +1684,43 @@ if __name__ == '__main__':
         print(f"✅ 长桥扫描完成: 找到 {len(results)} 个机会")
         return results
 
+
+
+    def print_top_results(self, results, n=10):
+        """打印Top N结果"""
+        print(f"\n📊 美股Top {n}高评分股票:")
+        print("-" * 80)
+        print(f"{'代码':<10} {'价格':>10} {'涨幅':>8} {'评分':>6} {'指数':<15}")
+        print("-" * 80)
+
+        for r in results[:n]:
+            display_score = r.get('final_score', r.get('score', r.get('base_score', 0)))
+            print(f"{r['symbol']:<10} ${r['price']:>8.2f} {r['change_pct']:>+7.2f}% {display_score:>5}分 {r['index']:<15}")
+
+
+if __name__ == '__main__':
+    # 导入交易日历
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/..')
+
+    try:
+        from trading_calendar import TradingCalendar
+        calendar = TradingCalendar()
+
+        # 检查是否为美股交易日
+        is_trading_day, reason = calendar.is_us_trading_day()
+
+        if not is_trading_day:
+            print(f"⏸️ 美股非交易日: {reason}")
+            print(f"💡 跳过扫描")
+            sys.exit(0)
+    except Exception as e:
+        print(f"⚠️ 交易日历检查失败: {e}")
+        print("💡 继续执行扫描...")
+
+    # 执行扫描
+    scanner = USScanner()  # 不传递scan_limit参数,扫描所有股票
+    results = scanner.scan(top_n=50)  # top_n只限制输出结果数量,不限制扫描股票数量
+    if results:
+        scanner.print_top_results(results, n=15)

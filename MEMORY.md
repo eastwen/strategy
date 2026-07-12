@@ -428,3 +428,12 @@ AppId: cli_a93b169884f8dcc1
 30 4 * * 2-6 /home/.../comprehensive-report-v12.py --us
 ```
 
+
+## Promoted From Short-Term Memory (2026-07-08)
+
+<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:11:13 -->
+- 2026-07-04 美股扫描器超时修复: 第一层 Finnhub：0-20 分钟（扫到多少算多少）; 第二层四源+LLM：20-35 分钟（超 15 分钟也 break）; 保存+余量：35-40 分钟 [score=0.869 recalls=0 avg=0.620 source=memory/2026-07-04.md:11-13]
+<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:6:8 -->
+- 2026-07-04 美股扫描器超时修复: `scan_with_finnhub` 加 `time_budget_seconds=1200`（20分钟），超时 break 返回已扫到的部分结果; `scan_with_alphavantage` 同样加 `time_budget_seconds=1200`（20分钟）; `save_results` 第二层循环加 `layer2_budget=900`（15分钟），超时 break 走 flush [score=0.869 recalls=0 avg=0.620 source=memory/2026-07-04.md:6-8]
+<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:5:5 -->
+- 2026-07-04 美股扫描器超时修复: **修复**（strategy/us-scanner.py）： [score=0.859 recalls=0 avg=0.620 source=memory/2026-07-04.md:5-5]

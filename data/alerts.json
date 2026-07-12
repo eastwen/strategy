@@ -1,204 +1,150 @@
 {
-  "time": "2026-06-26T23:29:31.541809",
+  "time": "2026-07-12T21:45:26.955488",
   "source": "news_integration",
   "alerts": [
     {
-      "symbol": "MU",
-      "title": "Micron falls 5% as tech stocks struggle - CNBC",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:05.002232",
+      "symbol": "NVDA",
+      "title": "Nvidia's Forward P/E Has Actually Fallen as Its Stock Price Rose. Here's How That's Possible.",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-07-12T21:45:02.184441",
       "importance": "高",
-      "alert_type": "新闻"
+      "alert_type": "重大利好"
     },
     {
-      "symbol": "AAPL",
-      "title": "Apple stock gets slammed on bigger Mac, iPad price hikes. Why it can weather the storm",
+      "symbol": "TGT",
+      "title": "US says it struck 140 Iranian military targets Saturday - Reuters",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-06-26T04:27:58",
+      "timestamp": "2026-07-12T12:26:00",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "TGT",
-      "title": "We're trimming a health-care stock into strength and raising our price target",
+      "title": "Trump says missiles aimed at Iran if Tehran targets US president - Reuters",
       "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-06-26T00:35:24",
+      "timestamp": "2026-07-11T11:35:00",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
-      "symbol": "MU",
-      "title": "The Club's top 10 things to watch in the stock market Thursday",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-25T21:11:09",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "AAPL",
-      "title": "Stock Market Weekly Review: S&amp;P 500, Nasdaq Below 50-Day Line; Micron, Apple In Focus",
+      "symbol": "WDC",
+      "title": "Why Western Digital (NASDAQ:WDC) Is Benefiting From AI-Driven Storage Demand and Tight HDD Supply Conditions",
       "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-06-26T23:29:02.675262",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "MU",
-      "title": "Stock Market Weekly Review: S&amp;P 500, Nasdaq Below 50-Day Line; Micron, Apple In Focus",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-06-26T23:29:02.675262",
+      "timestamp": "2026-07-12T21:45:02.181275",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "NVDA",
-      "title": "Nvidia Stock Falls as Tech Selloff Catches Up With Chips - Barron's",
-      "source": "Google News Tech",
+      "title": "Dow Jones Futures Loom Amid New U.S.-Iran Attacks; Nvidia, Micron, Sandisk Near Buy Points",
+      "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-06-26T23:29:04.998014",
+      "timestamp": "2026-07-12T21:45:02.181686",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
-      "symbol": "00388",
-      "title": "首只！易方达港交所科技100指数ETF上市",
+      "symbol": "MU",
+      "title": "Dow Jones Futures Loom Amid New U.S.-Iran Attacks; Nvidia, Micron, Sandisk Near Buy Points",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-07-12T21:45:02.181686",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "TSM",
+      "title": "Great Tech Stocks to Buy Before Q2 Earnings and Hold: AI Chip Maker TSMC - Yahoo Finance",
+      "source": "Google News Tech",
+      "sentiment": 0.5,
+      "timestamp": "2026-07-12T21:45:05.037693",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "MU",
+      "title": "Is Now the Ultimate Entry Point for Micron Technology Stock? - The Globe and Mail",
+      "source": "Google News Tech",
+      "sentiment": 0.5,
+      "timestamp": "2026-07-12T21:45:05.038705",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "AMD",
+      "title": "美股三大指数继续收涨，SK海力士ADR上市首日涨超12%，脸书涨5.97%，英伟达涨4.03%，AMD涨2.04%，SpaceX跌4.51%",
       "source": "东方财富",
       "sentiment": 0.5,
-      "timestamp": "2026-06-26T23:29:09.509356",
+      "timestamp": "2026-07-12T21:45:15.509107",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "Why breakthrough GLP-1 weight loss pills may be a bad thing for employer insurance coverage",
-      "source": "Finnhub",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T22:08:22",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "As Social Security faces trust fund depletion, some Washington lawmakers call for taxing high earners",
+      "title": "India, NZ plan strategic partnership including Maritime Security",
       "source": "Finnhub",
       "sentiment": 1.0,
-      "timestamp": "2026-06-26T05:20:56",
+      "timestamp": "2026-07-11T12:07:30",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "IMF says energy, commodity prices fall after Iran deal but will take time to normalize - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T02:16:12",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "We're locking in triple-digit profits on an AI winner at record highs",
-      "source": "Finnhub",
+      "title": "I'm Calling It. It's Time to Load Up on These 3 High-Yielding Dividend Stocks Right Now (1 Currently Yields Over 8.5%)",
+      "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-06-25T23:11:35",
+      "timestamp": "2026-07-12T21:45:02.183109",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Neogen Gains 101.1% in a Year: What's Driving the Rally?",
+      "title": "1 Vanguard Index Fund to Buy Before It Soars in 2026, According to a Wall Street Analyst",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-06-26T23:29:02.673823",
+      "timestamp": "2026-07-12T21:45:02.183507",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Correction: Exchange-Traded Funds, Equity Futures Decline Pre-Bell Friday as Investors Shift Focus From Middle East to Technology Stocks",
-      "source": "Yahoo Finance",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:02.676836",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Nasdaq Falls 1%. The Chip Selloff Is Back.",
-      "source": "Yahoo Finance",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:02.678768",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "BankUnited Gains 12.7% So Far in 2026: Should You Buy the Stock Now?",
-      "source": "Yahoo Finance",
+      "title": "Technology: Stocks Surged During the Second Quarter - Morningstar",
+      "source": "Google News Tech",
       "sentiment": 1.0,
-      "timestamp": "2026-06-26T23:29:02.679062",
+      "timestamp": "2026-07-12T21:45:05.036275",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Asia stock markets slide as tech shares slump - BBC",
+      "title": "Stock Market Today, July 9: AI Chip, Technology Stocks Rally, Overcoming Ceasefire Worries - The Motley Fool",
       "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:04.997527",
+      "sentiment": 1.0,
+      "timestamp": "2026-07-12T21:45:05.036594",
       "importance": "高",
-      "alert_type": "新闻"
+      "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Tech stocks live: Tech sells off as OpenAI weighs delaying IPO until 2027 - Yahoo Finance",
+      "title": "A record number of tech stock insiders are buying their own shares in 2026 - Yahoo Finance",
       "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:04.998713",
+      "sentiment": 1.0,
+      "timestamp": "2026-07-12T21:45:05.037370",
       "importance": "高",
-      "alert_type": "新闻"
+      "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Tech stocks tumble on concerns over AI spending - BBC",
+      "title": "Stock Market Today, July 9: AI Chip, Technology Stocks Rally, Overcoming Ceasefire Worries - Yahoo Finance",
       "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:04.999168",
+      "sentiment": 1.0,
+      "timestamp": "2026-07-12T21:45:05.038061",
       "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Wall Street stocks drop in tech sell-off – latest updates - The Telegraph",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:04.999649",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "AI stock slump raises the question if investors are just taking profits or getting very nervous - AP News",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:05.000606",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "AI stocks melt down again. What’s going on? - CNN",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-06-26T23:29:05.002599",
-      "importance": "高",
-      "alert_type": "新闻"
+      "alert_type": "重大利好"
     }
   ]
 }

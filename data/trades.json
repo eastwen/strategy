@@ -1,128 +1,112 @@
 {
   "source": "futu_simulate",
-  "sync_time": "2026-06-26T23:30:04.140896",
+  "sync_time": "2026-07-12T21:40:03.477636",
   "accounts": [
     {
       "acc_id": 15270898,
       "acc_type": "MARGIN",
-      "total_assets": 1256870.948,
-      "cash": 573382.938,
-      "market_val": 683488.01,
-      "securities_assets": 1256870.948
+      "total_assets": 1250155.409,
+      "cash": 329408.049,
+      "market_val": 920747.36,
+      "securities_assets": 1250155.409
     },
     {
       "acc_id": 15270899,
       "acc_type": "CASH",
-      "total_assets": 984167.368,
-      "cash": 840322.368,
-      "market_val": 143845.0,
-      "securities_assets": 984167.368
+      "total_assets": 989316.083,
+      "cash": 882592.083,
+      "market_val": 106724.0,
+      "securities_assets": 989316.083
     }
   ],
   "positions": [
     {
       "acc_id": 15270898,
-      "symbol": "US.V",
-      "shares": 430,
-      "cost_price": 335.8,
-      "market_val": 144516.55,
-      "pl_ratio": 0.0008487194758784991
+      "symbol": "US.NFLX",
+      "shares": 1885,
+      "cost_price": 73.235,
+      "market_val": 138302.45,
+      "pl_ratio": 0.1843380897112037
     },
     {
       "acc_id": 15270898,
-      "symbol": "US.ACET",
-      "shares": 15350,
-      "cost_price": 8.2,
-      "market_val": 124642.0,
-      "pl_ratio": -0.009756097560975611
-    },
-    {
-      "acc_id": 15270898,
-      "symbol": "US.PG",
-      "shares": 259,
-      "cost_price": 145.53,
-      "market_val": 38676.47,
-      "pl_ratio": 0.026111454682883256
-    },
-    {
-      "acc_id": 15270898,
-      "symbol": "US.RTX",
-      "shares": 827,
-      "cost_price": 181.34999999999997,
-      "market_val": 156695.825,
-      "pl_ratio": 0.04480286738351255
+      "symbol": "US.WFC",
+      "shares": 1769,
+      "cost_price": 85.62,
+      "market_val": 154186.04,
+      "pl_ratio": 1.7986451763606637
     },
     {
       "acc_id": 15270898,
       "symbol": "US.TPR",
       "shares": 448,
       "cost_price": 146.45,
-      "market_val": 66339.84,
-      "pl_ratio": 0.01113007852509389
+      "market_val": 63047.04,
+      "pl_ratio": -3.9057698873335616
     },
     {
       "acc_id": 15270898,
-      "symbol": "US.IRM",
-      "shares": 635,
-      "cost_price": 130.58,
-      "market_val": 83543.775,
-      "pl_ratio": 0.007543268494409557
+      "symbol": "US.RTX",
+      "shares": 827,
+      "cost_price": 181.34999999999997,
+      "market_val": 162034.11,
+      "pl_ratio": 8.03970223325062
     },
     {
       "acc_id": 15270898,
-      "symbol": "US.INTC",
-      "shares": 526,
-      "cost_price": 134.22,
-      "market_val": 68198.53,
-      "pl_ratio": -0.03401132469080614
+      "symbol": "US.META",
+      "shares": 167,
+      "cost_price": 671.86,
+      "market_val": 111758.07,
+      "pl_ratio": -0.3944274104724199
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.AEHR",
+      "shares": 1984,
+      "cost_price": 75.73,
+      "market_val": 144038.4,
+      "pl_ratio": -4.133104450019807
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.MRVL",
+      "shares": 625,
+      "cost_price": 245.84,
+      "market_val": 147381.25,
+      "pl_ratio": -4.079889358932639
+    },
+    {
+      "acc_id": 15270899,
+      "symbol": "HK.01024",
+      "shares": 600,
+      "cost_price": 43.88,
+      "market_val": 25824.0,
+      "pl_ratio": -1.9143117593436645
+    },
+    {
+      "acc_id": 15270899,
+      "symbol": "HK.01928",
+      "shares": 2000,
+      "cost_price": 13.19,
+      "market_val": 26680.0,
+      "pl_ratio": 1.1372251705837757
+    },
+    {
+      "acc_id": 15270899,
+      "symbol": "HK.00101",
+      "shares": 4000,
+      "cost_price": 7.02,
+      "market_val": 28400.0,
+      "pl_ratio": 1.1396011396011396
     },
     {
       "acc_id": 15270899,
       "symbol": "HK.00688",
       "shares": 2000,
       "cost_price": 12.76,
-      "market_val": 24340.0,
-      "pl_ratio": -0.04623824451410658
-    },
-    {
-      "acc_id": 15270899,
-      "symbol": "HK.00285",
-      "shares": 1000,
-      "cost_price": 22.12,
-      "market_val": 21240.0,
-      "pl_ratio": -0.039783001808318265
-    },
-    {
-      "acc_id": 15270899,
-      "symbol": "HK.00267",
-      "shares": 2000,
-      "cost_price": 12.16,
-      "market_val": 23560.0,
-      "pl_ratio": -0.03125
-    },
-    {
-      "acc_id": 15270899,
-      "symbol": "HK.00300",
-      "shares": 300,
-      "cost_price": 82.9,
-      "market_val": 24105.0,
-      "pl_ratio": -0.030759951749095297
-    },
-    {
-      "acc_id": 15270899,
-      "symbol": "HK.00027",
-      "shares": 1000,
-      "cost_price": 29.58,
-      "market_val": 29200.0,
-      "pl_ratio": -0.012846517917511832
-    },
-    {
-      "acc_id": 15270899,
-      "symbol": "HK.00291",
-      "shares": 1000,
-      "cost_price": 21.82,
-      "market_val": 21400.0,
-      "pl_ratio": -0.01924839596700275
+      "market_val": 25820.0,
+      "pl_ratio": 1.1755485893416928
     }
   ],
   "trades": []
