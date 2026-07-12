@@ -1,20 +1,30 @@
 # Stock 自动交易系统使用文档
 
-> 版本: v2.2 (四源共振真实评分 + LLM 推理模型修复)  
-> 最后更新: 2026-06-26
+> 版本: v2.4 (五源共振 + LLM推理模型适配 + 飞书推送增强)  
+> 最后更新: 2026-07-12
 
-## 🆕 v2.2 变更摘要 (2026-06-25 ~ 06-26)
+## 🆕 v2.4 变更摘要 (2026-07-04 ~ 07-12)
 
-- **四源共振真实评分模块 v1.0** (`strategy/four_source_scorer.py`)
-  - 公告维度：新增 `_announce_news_event`，识别财报 beat / 重大利好(+15) / 重大利空(-10)
-  - 社区维度：美股新增 `_us_public_attention`（Yahoo Finance / Google News / Finnhub），不再只查中文源
-  - 新闻维度：news.db 免底关键词正面情绪 +5
-- **LLM 推理模型 token 修复** (`strategy/llm_stock_analyzer.py`)
+- **五源共振评分系统** (`strategy/four_source_scorer.py`)
+  - 新增资金异动维度（10分），接入 futu-capital-anomaly skill
+  - 总分从100分（四源）扩展为100分（五源，重新分配权重）
+  - 资讯25 / 公告20 / 社区25 / 机构20 / 资金10
+- **LLM 推理模型适配** (`strategy/llm_stock_analyzer.py`)
+  - 自动检测 reasoning_content，max_tokens 动态调整
   - 推理模型 (deepseek-v4-pro 等) 自动抬到 800 tokens
-  - `content` 空时从 `reasoning_content` 末尾抽答案，避免误判为调用失败
+  - content 空时从 reasoning_content 末尾抽答案
+- **飞书推送增强** (`strategy/feishu-pusher.py`)
+  - 买卖通知含五源分数 + 资金方向 + 社区多空比
+  - 机会推送含完整五源分解
+- **富途社区接入** (`strategy/four_source_scorer.py`)
+  - news_type=1/2/3 覆盖新闻/公告/研报
+  - comment sentiment 合成社区情绪
+- **统一配置管理** (`strategy/runtime_config.py`)
+  - API密钥从 .api-keys.json 加载
+  - 运行时参数集中管理
+- **系统启动检查** (`strategy/system-preflight.py`)
+  - 启动前环境验证
 - **门槛分级**：交易时段 `min_score=80` 自动下单 / 非交易时段 `opp_alert_score=90` 仅推送
-- **验证案例 MU**：51 → 83 (news 27 / ann 15 / com 20 / inst 24 - LLM 3)
-
 ---
 
 ## 📋 目录
