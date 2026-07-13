@@ -1,17 +1,18 @@
 {
   "_meta": {
-    "current_version": "1.6",
-    "last_updated": "2026-04-02",
+    "current_version": "2.4",
+    "last_updated": "2026-07-14",
     "history": [
-      "v1.6 (2026-04-02): 整合新闻系统+LLM分析 (当前版本)",
-      "v1.7 (2026-04-02): 仅改名，内容与 v1.6 完全一致，已废弃"
+      "v1.6 (2026-04-02): 整合新闻系统+LLM分析 (历史版本)",
+      "v1.7 (2026-04-02): 仅改名，内容与 v1.6 完全一致，已废弃",
+      "v2.4 (2026-07-14): 当前运行版本由 strategy/runtime_config.py 统一管理"
     ],
-    "_NOTE": "此文件由 us-scanner.py、us-optimizer.py、news_integration.py 共同读取，请勿创建带版本号副本"
+    "_NOTE": "历史参数文件；当前版本、交易门槛和仓位风控以 strategy/runtime_config.py 的 STRATEGY_POLICY 为唯一来源"
   },
-  "version": "1.6",
+  "version": "2.4",
   "strategy_name": "美股四源共振策略",
   "description": "美股交易策略 v1.6 - 已整合新闻系统+LLM分析",
-  "last_updated": "2026-04-02",
+  "last_updated": "2026-07-14",
   "four_sources": {
     "international_news": {
       "name": "国际资讯",
@@ -179,5 +180,6 @@
     "完善已平仓交易统计",
     "优化RSI阈值",
     "调整止盈止损比例"
-  ]
+  ],
+  "updated": "2026-07-14"
 }

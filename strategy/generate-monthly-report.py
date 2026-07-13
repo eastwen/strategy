@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-月报生成器 v2.0 - 基于v12模板
+月报生成器 - 统一策略版本
 统计本月交易数据、收益归因、策略分析
 """
 
@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from calendar import monthrange
 
-from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_DIR, load_api_keys
+from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_POLICY, format_strategy_policy_markdown, load_api_keys
 from futu import OpenQuoteContext
 
 class MonthlyReportV2:
@@ -244,51 +244,11 @@ class MonthlyReportV2:
         else:
             report += "| - | 无持仓 | - | - | - | - | - |\n"
 
-        report += f"""
----
+        report += "\n---\n\n## 🎯 四、当前策略说明\n\n" + format_strategy_policy_markdown()
+        report += "---\n\n## 🔍 五、本月扫描统计\n\n"
+        report += "### 🇭🇰 港股高评分机会（≥{}分）\n\n".format(STRATEGY_POLICY["hk"]["min_score"])
+        report += "| 标的 | 行业 | 价格 | 评分 |\n|------|------|------|------|\n"
 
-## 🎯 四、策略版本
-
-### 🇭🇰 港股策略 v2.0（动态权重版）
-
-**核心特点**
-- 动态行业权重调整（0.2-2.0）
-- 五源共振：资讯+公告+社区+机构+资金
-- 情绪监控：VHSI、资金流向、牛熊证比例
-
-**回测表现**
-| 行业 | 平均收益 | 胜率 | 权重 |
-|------|----------|------|------|
-| 新能源汽车 | +2.58% | 100% | 2.00 |
-| 消费 | +2.31% | 100% | 1.85 |
-| 医药 | +0.43% | 50% | 0.81 |
-| 金融 | -0.64% | 50% | 0.22 |
-| 互联网科技 | -0.68% | 0% | 0.20 |
-
-### 🇺🇸 美股策略 v1.6（严格择时版）
-
-**核心特点**
-- 严格择时：MA20 > MA50，价格 > MA20
-- 多信号共振：MACD+均线+成交量+布林带
-- 情绪监控：VIX、恐慌贪婪指数、期权比例
-
-**回测表现**
-| 标的 | 收益率 | 最大回撤 | 胜率 |
-|------|--------|----------|------|
-| Vertiv | +2.88% | 0.28% | 100% |
-| Meta | +0.93% | 0.20% | 100% |
-| 平均 | +1.91% | - | 100% |
-
----
-
-## 🔍 五、本月扫描统计
-
-### 🇭🇰 港股高评分机会（≥70分）
-
-| 标的 | 行业 | 价格 | 评分 |
-|------|------|------|------|
-"""
-        
         if hk_high:
             for s in hk_high[:10]:
                 report += f"| {s.get('symbol', 'N/A')} | {s.get('sector', 'N/A')} | HK${s.get('price', 0):.2f} | {s.get('base_score', 0)}分 |\n"
@@ -296,7 +256,7 @@ class MonthlyReportV2:
             report += "| - | 无 | - | - |\n"
 
         report += """
-### 🇺🇸 美股高评分机会（≥70分）
+### 🇺🇸 美股高评分机会（≥75分）
 
 | 标的 | 价格 | 评分 |
 |------|------|------|

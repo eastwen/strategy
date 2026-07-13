@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-港股扫描器 v2.0
+港股扫描器（版本由 runtime_config.SYSTEM_VERSION 管理）
 扫描恒生指数(90只) + 恒生科技指数(30只) = 101只
 数据源：Futu OpenD（主） / Tushare（备）
 扫描时间：08:50预扫描、交易时段（午休不扫描）
@@ -24,6 +24,8 @@ from runtime_config import (
     FUTU_PORT,
     NEWS_DB_PATH,
     STRATEGY_DIR,
+    STRATEGY_POLICY,
+    SYSTEM_VERSION,
     config_path,
     load_api_keys,
 )
@@ -596,7 +598,7 @@ class HKScanner:
     def scan(self, top_n=50):
         """扫描港股市场"""
         print(f"\n{'='*60}")
-        print(f"🇭🇰 港股扫描器 v2.0")
+        print(f"🇭🇰 港股扫描器 {SYSTEM_VERSION}")
         print(f"{'='*60}")
         print(f"股票池: 恒生指数({len(self.hsi)}只) + 恒生科技({len(self.hstech)}只) = {len(self.stocks)}只")
         print(f"扫描时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -860,7 +862,7 @@ class HKScanner:
         results = llm_analyzed
         
         # ===== LLM分析完成后，直接触发交易 =====
-        auto_trade_min_score = 75
+        auto_trade_min_score = STRATEGY_POLICY['hk']['min_score']
         high_score_opportunities = [
             c for c in results
             if c.get('llm_passed', True) and c.get('final_score', 0) >= auto_trade_min_score

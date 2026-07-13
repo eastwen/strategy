@@ -36,6 +36,51 @@ PYTHON_BIN = Path(os.getenv("STOCK_PYTHON", sys.executable)).expanduser().resolv
 OPENCLAW_HOME = Path(os.getenv("OPENCLAW_HOME", Path.home() / ".openclaw")).expanduser().resolve()
 SKILLS_DIR = Path(os.getenv("OPENCLAW_SKILLS_DIR", OPENCLAW_HOME / "skills")).expanduser().resolve()
 
+# Single source of truth for strategy thresholds shown in reports and enforced by runners.
+SYSTEM_VERSION = "v2.4"
+SYSTEM_UPDATED = "2026-07-14"
+
+STRATEGY_POLICY = {
+    "us": {
+        "version": SYSTEM_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
+        "opp_alert_score": 85, "position_size": 0.12, "max_positions": 999,
+        "single_position_limit": 0.12, "total_position_limit": 1.0,
+        "score_position_rules": "80-84分 8%-10%；85-89分 10%-11%；90-94分 11%-12%；95分以上 12%",
+        "market_sentiment_rules": "≥65 正常；55-64 为90%；45-54 为80%；35-44 为60%；25-34 为50%；<25 暂停开仓",
+    },
+    "hk": {
+        "version": SYSTEM_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
+        "position_size": 0.03, "max_positions": 999,
+        "single_position_limit": 0.06, "total_position_limit": 1.0,
+        "score_position_rules": "80-84分 3%；85-89分 4%；90-94分 5%；95分以上 6%",
+    },
+    "risk": {
+        "cooldown_seconds": 86400, "hard_stop_loss_pct": -6,
+        "trailing_profit_trigger_pct": 4, "trailing_drawdown_pct": 2,
+    },
+}
+
+
+def format_strategy_policy_markdown() -> str:
+    """Render the current user-visible strategy rules from one policy source."""
+    us = STRATEGY_POLICY["us"]
+    hk = STRATEGY_POLICY["hk"]
+    risk = STRATEGY_POLICY["risk"]
+    return f"""### 🇭🇰 港股策略（{hk["version"]}，配置更新：{hk["updated"]}）
+- 五源共振：国际资讯、港股公告、社区情绪、机构观点、资金异动
+- 交易候选线：综合评分≥{hk["min_score"]}；动态仓位：{hk["score_position_rules"]}
+- 单票上限：{hk["single_position_limit"] * 100:.0f}%；总仓位上限：{hk["total_position_limit"] * 100:.0f}%
+- 风控：ATR动态止盈止损，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损
+
+### 🇺🇸 美股策略（{us["version"]}，配置更新：{us["updated"]}）
+- 五源共振后仅将 Top 20 送入 LLM；LLM失败或未通过不交易
+- 交易候选线：综合评分≥{us["min_score"]}；非交易时段提醒线：{us["opp_alert_score"]}
+- 动态仓位：{us["score_position_rules"]}；单票上限：{us["single_position_limit"] * 100:.0f}%
+- 市场情绪总仓位：{us["market_sentiment_rules"]}
+- 风控：ATR动态止盈止损，浮盈≥{risk["trailing_profit_trigger_pct"]}%后从最高价回撤{risk["trailing_drawdown_pct"]}%触发追踪止盈，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损
+
+"""
+
 
 def data_path(*parts: str) -> Path:
     return DATA_DIR.joinpath(*parts)

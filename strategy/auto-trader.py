@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-自动交易执行器 v2.1
+自动交易执行器（版本由 runtime_config.SYSTEM_VERSION 管理）
 集成技术指标检查
 - MA趋势判断
 - RSI检查
@@ -22,6 +22,8 @@ from runtime_config import (
     FUTU_HOST,
     FUTU_PORT,
     STRATEGY_DIR,
+    STRATEGY_POLICY,
+    SYSTEM_VERSION,
     load_api_keys,
 )
 
@@ -46,7 +48,7 @@ TERMINAL_ORDER_STATUSES = {
 
 class AutoTrader:
     """自动交易执行器"""
-    
+
     def __init__(self):
         self.load_config()
         self.quote_ctx = None
@@ -56,10 +58,10 @@ class AutoTrader:
         self.open_positions_file = str(DATA_DIR / 'open-positions.json')
         self.staged_reductions_file = str(DATA_DIR / 'staged-reductions.json')
         self._market_sentiment_cache = {'data': None, 'timestamp': 0}
-    
+
     def save_open_position(self, symbol, shares, entry_price, market='us', score=0, reasons=None, risk_targets=None):
         """保存入场记录
-        
+
         Args:
             symbol: 标的代码
             shares: 持仓数量
@@ -77,10 +79,10 @@ class AutoTrader:
                     positions = json.load(f)
             except:
                 positions = []
-            
+
             # 检查是否已存在
             positions = [p for p in positions if p.get('symbol') != symbol]
-            
+
             record = {
                 'symbol': symbol,
                 'shares': shares,
@@ -99,7 +101,7 @@ class AutoTrader:
                     if v is not None:
                         record[k] = v
             positions.append(record)
-            
+
             with open(self.open_positions_file, 'w') as f:
                 json.dump(positions, f, ensure_ascii=False, indent=2)
             atr_note = ''
@@ -108,7 +110,7 @@ class AutoTrader:
             print(f"   💾 已记录入场: {symbol} @ ${entry_price} (评分{score}){atr_note}")
         except Exception as e:
             print(f"   ⚠️ 记录入场失败: {e}")
-    
+
     def update_peak_profit(self, symbol, current_pnl_pct):
         """更新持仓峰值浮盈。pl_ratio 在 Futu 中已是百分比数值，如 4.2 表示 +4.2%。"""
         try:
@@ -169,16 +171,16 @@ class AutoTrader:
                     positions = json.load(f)
             except:
                 return None
-            
+
             # 找到并移除
             result = None
             positions = [p for p in positions if p.get('symbol') != symbol]
-            
+
             with open(self.open_positions_file, 'w') as f:
                 json.dump(positions, f, ensure_ascii=False, indent=2)
         except:
             pass
-    
+
     def get_open_position(self, symbol):
         """获取入场记录"""
         try:
@@ -190,7 +192,7 @@ class AutoTrader:
             return None
         except:
             return None
-    
+
     def _lookup_entry_context(self, symbol):
         """从 open-positions.json 查询入场上下文（score/reasons/风控价位）。
         2026-06-24 east 补：止损/止盈记录落盘时需要带上这些信息。
@@ -215,9 +217,9 @@ class AutoTrader:
             pass
         return {'entry_score': 0, 'entry_reasons': [], 'atr_stop': None, 'tp_trend': None, 'tp_first': None, 'entry_price': None}
 
-    def save_closed_trade(self, symbol, side, shares, entry_price, exit_price, pnl_pct, reason, market='us', stop_type=None, entry_score=0, llm_review=None, entry_reasons=None):
+    def save_closed_trade(self, symbol, side, shares, entry_price, exit_price, pnl_pct, reason, market='us', stop_type=None, entry_score=0, llm_review=None, entry_reasons=None, order_id=None):
         """保存平仓记录
-        
+
         Args:
             symbol: 标的代码
             side: 买卖方向
@@ -234,7 +236,7 @@ class AutoTrader:
         try:
             # 计算盈亏
             pnl = (exit_price - entry_price) * shares if entry_price > 0 else 0
-            
+
             # 读取现有记录
             closed_trades = []
             try:
@@ -242,7 +244,7 @@ class AutoTrader:
                     closed_trades = json.load(f)
             except:
                 closed_trades = []
-            
+
             # 添加新记录
             trade = {
                 'symbol': symbol,
@@ -264,45 +266,48 @@ class AutoTrader:
             # 2026-06-24 east 修复: 入场理由一并落盘，避免后续复盘信息缺失
             if entry_reasons:
                 trade['entry_reasons'] = list(entry_reasons)
+            if order_id:
+                trade['order_id'] = str(order_id)
+                trade['data_source'] = 'futu_filled_order'
             closed_trades.append(trade)
-            
+
             # 保存
             with open(self.closed_trades_file, 'w') as f:
                 json.dump(closed_trades, f, ensure_ascii=False, indent=2)
-            
+
             print(f"   💾 已保存平仓记录: {symbol} {reason} {pnl_pct:+.2f}%")
         except Exception as e:
             print(f"   ⚠️ 保存平仓记录失败: {e}")
-        
+
     def load_config(self):
         """加载配置"""
-        # 直接使用默认配置（不需要配置文件）
-        self.us_config = {'min_score': 75, 'opp_alert_score': 85, 'position_size': 0.12, 'max_positions': 999}
-        self.hk_config = {'min_score': 75, 'position_size': 0.03, 'max_positions': 999}
+        # 交易器、扫描器和日报共用 runtime_config 中的策略清单。
+        self.us_config = dict(STRATEGY_POLICY["us"])
+        self.hk_config = dict(STRATEGY_POLICY["hk"])
         self.risk_config = {
-            'us_single_position_limit': 0.12,
-            'us_total_position_limit': 1.0,   # 总仓位无上限（VIX高位会单向收紧到 50% / 0%）
-            'hk_single_position_limit': 0.06,
-            'hk_total_position_limit': 1.0,
+            "us_single_position_limit": self.us_config["single_position_limit"],
+            "us_total_position_limit": self.us_config["total_position_limit"],
+            "hk_single_position_limit": self.hk_config["single_position_limit"],
+            "hk_total_position_limit": self.hk_config["total_position_limit"],
         }
-        self.cooldown_seconds = 86400  # 24小时冷却：同一标的一天内不重复交易
+        self.cooldown_seconds = STRATEGY_POLICY["risk"]["cooldown_seconds"]
         self.recently_closed = {}  # {symbol: timestamp} 记录最近平仓的标的，防止重复平仓
         # 持久化通知冷却（auto-trader 每 5 分钟被 cron 重启，内存字典会丢，必须落盘）
         self._load_notify_cooldowns()
-        
+
         # 兼容旧代码
         self.config = {
             'min_score': self.us_config.get('min_score', 75),
             'max_positions': self.us_config.get('max_positions', 999),
             'position_size': self.us_config.get('position_size', 0.12),
         }
-        
+
         try:
             keys = load_api_keys()
             self.feishu_chat_id = keys.get('feishu', {}).get('chatId', '') or keys.get('feishu', {}).get('openId', '')
         except:
             pass
-    
+
     def _load_notify_cooldowns(self):
         """加载持久化的通知冷却记录（跨进程）。只读未过期的条目。"""
         path = str(DATA_DIR / 'notify-cooldowns.json')
@@ -338,7 +343,7 @@ class AutoTrader:
             os.replace(tmp, path)
         except Exception as e:
             print(f"⚠️ 保存通知冷却失败: {e}")
-    
+
     def connect_futu(self):
         """连接Futu OpenD（每次都创建新连接确保数据最新）"""
         # 关闭旧连接
@@ -359,22 +364,22 @@ class AutoTrader:
                 pass
         try:
             self.quote_ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
-            
+
             # 模拟盘不需要解锁，直接创建交易上下文
             # 美股交易上下文 (2026-06-26 east: futu-api 10.8 废弃 OpenUSTradeContext、OpenHKTradeContext，统一用 OpenSecTradeContext)
             self.trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.US, host=FUTU_HOST, port=FUTU_PORT,
                                                   security_firm=SecurityFirm.FUTUSECURITIES)
-            
+
             # 港股交易上下文
             self.hk_trade_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.HK, host=FUTU_HOST, port=FUTU_PORT,
                                                      security_firm=SecurityFirm.FUTUSECURITIES)
-            
+
             print("✅ 连接Futu OpenD成功")
             return True
         except Exception as e:
             print(f"❌ 连接Futu失败: {e}")
             return False
-    
+
     def place_order(self, symbol, side, quantity, market='us'):
         """下单"""
         # 选择正确的交易上下文
@@ -388,7 +393,7 @@ class AutoTrader:
                 trd_side=TrdSide.BUY if side == 'BUY' else TrdSide.SELL,
                 trd_env=TrdEnv.SIMULATE
             )
-            
+
             if ret == RET_OK:
                 order_id = data['order_id'].iloc[0]
                 market_tag = '🇭🇰' if market == 'hk' else '🇺🇸'
@@ -400,7 +405,7 @@ class AutoTrader:
         except Exception as e:
             print(f"❌ 下单异常: {e}")
             return False, str(e)
-    
+
     def _wait_filled_price(self, order_id, market='us', timeout=10, poll_interval=0.5):
         """等订单状态 FILLED_ALL 并回查真实成交均价 dealt_avg_price。
 
@@ -444,6 +449,60 @@ class AutoTrader:
         # 超时：能拿到部分成交均价就返回部分
         return (last_avg if last_avg > 0 else None), last_qty, last_status or 'TIMEOUT'
 
+    def _queue_pending_sell(self, order_id, symbol, market, quantity, entry_price, reasons):
+        path = DATA_DIR / 'pending-sell-orders.json'
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+            data[str(order_id)] = {
+                'order_id': str(order_id), 'symbol': symbol, 'market': market,
+                'quantity': int(quantity), 'entry_price': float(entry_price or 0),
+                'reason': (reasons or ['自动平仓'])[0], 'created_at': datetime.now().isoformat(),
+            }
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+            print(f"  ⏳ 已登记待确认卖单: {order_id}")
+        except Exception as e:
+            print(f"  ⚠️ 待确认卖单登记失败: {e}")
+
+    def reconcile_pending_sells(self):
+        path = DATA_DIR / 'pending-sell-orders.json'
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except Exception as e:
+            print(f"⚠️ 读取待确认卖单失败: {e}")
+            return
+        changed = False
+        for oid, item in list(data.items()):
+            ctx = self.hk_trade_ctx if item.get('market') == 'hk' else self.trade_ctx
+            try:
+                ret, df = ctx.order_list_query(order_id=str(oid), trd_env=TrdEnv.SIMULATE)
+                if ret != RET_OK or df is None or len(df) == 0:
+                    start = str(item.get('created_at', datetime.now().isoformat()))[:10]
+                    ret, df = ctx.history_order_list_query(start=start, end=datetime.now().date().isoformat(), trd_env=TrdEnv.SIMULATE)
+                    if ret == RET_OK and df is not None:
+                        df = df[df['order_id'].astype(str) == str(oid)]
+                if ret != RET_OK or df is None or len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                status = str(row.get('order_status', ''))
+                if status == 'FILLED_ALL' and float(row.get('dealt_avg_price', 0) or 0) > 0:
+                    with open(self.closed_trades_file, 'r') as f:
+                        existing = json.load(f) or []
+                    if not any(str(x.get('order_id', '')) == str(oid) for x in existing):
+                        price = float(row.get('dealt_avg_price'))
+                        qty = int(row.get('dealt_qty', 0) or item.get('quantity', 0))
+                        entry = float(item.get('entry_price', 0) or 0)
+                        pnl_pct = ((price - entry) / entry * 100) if entry else 0
+                        self.save_closed_trade(item['symbol'], 'SELL', qty, entry, price, pnl_pct, item.get('reason', '自动平仓'), item.get('market', 'us'), order_id=oid)
+                        from feishu_pusher import FeishuPusher
+                        FeishuPusher().send_sell_notification(item['symbol'], qty, price, qty * price, pnl_pct, item.get('reason', '自动平仓'), oid, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    del data[oid]; changed = True
+                elif status in ('CANCELLED_ALL', 'FAILED', 'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT'):
+                    del data[oid]; changed = True
+            except Exception as e:
+                print(f"⚠️ 待确认卖单回查失败 {oid}: {e}")
+        if changed:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
     def _get_hk_lot_size(self, symbol):
         """获取港股每手股数：优先从 Futu 实时基础信息查询，失败时使用本地兜底。"""
         try:
@@ -486,7 +545,7 @@ class AutoTrader:
             'HK.02020': 500,   # 安踏体育
         }
         return lot_sizes.get(symbol, 100)
-    
+
     _trading_day_cache = {}  # {(market, 'YYYY-MM-DD'): bool}
 
     def is_trading_day(self, market='us', date=None):
@@ -555,24 +614,24 @@ class AutoTrader:
             # 盘后: 04:00 - 04:30
             after_hours_start = dt_time(4, 0)
             after_hours_end = dt_time(4, 30)
-            
+
             # 判断是否在交易时段
             if now >= market_start or now <= market_end:
                 return True  # 盘中（跨午夜）
             if now >= after_hours_start and now <= after_hours_end:
                 return True  # 盘后
-            
+
             return False
         elif market == 'hk':
             start = dt_time(9, 30)
             end = dt_time(16, 0)
             return start <= now <= end
-        
+
         return False
-    
+
     def get_account_and_positions(self, market='us'):
         """获取账户和持仓信息（从API实时获取）
-        
+
         Args:
             market: 'us' 或 'hk'，决定使用哪个交易上下文
         """
@@ -584,22 +643,22 @@ class AutoTrader:
             else:
                 ctx = self.trade_ctx
                 print(f"  📊 使用美股交易上下文")
-            
+
             # 查询账户
             ret, acc_data = ctx.accinfo_query(trd_env=TrdEnv.SIMULATE)
             if ret != RET_OK or acc_data is None or len(acc_data) == 0:
                 print(f"⚠️ {market.upper()}账户查询失败: {ret}")
                 return None
-            
+
             total_assets = acc_data.iloc[0]['total_assets']
             total_cash = acc_data.iloc[0]['cash']
             account_market_val = acc_data.iloc[0].get('market_val', 0)
-            
+
             print(f"  💰 {market.upper()}账户: 总资产=${total_assets:,.2f}, 现金=${total_cash:,.2f}, 持仓市值=${account_market_val:,.2f}")
-            
+
             # 查询持仓
             ret, positions_data = ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
-            
+
             positions = []
             if ret == RET_OK and positions_data is not None and len(positions_data) > 0:
                 for p in positions_data.itertuples():
@@ -613,7 +672,7 @@ class AutoTrader:
                 print(f"  📈 {market.upper()}持仓: {len(positions)}只")
             else:
                 print(f"  📈 {market.upper()}持仓: 0只")
-            
+
             # 获取未完成订单
             ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
             pending_orders = []
@@ -623,7 +682,7 @@ class AutoTrader:
                     pending_orders.append(o.code.replace('US.', '').replace('HK.', ''))
                 if pending_orders:
                     print(f"  ⏳ {market.upper()}未完成订单: {len(pending_orders)}个")
-            
+
             return {
                 'total_assets': total_assets,
                 'cash': total_cash,
@@ -635,9 +694,9 @@ class AutoTrader:
             print(f"❌ 获取{market.upper()}账户信息失败: {e}")
             import traceback
             traceback.print_exc()
-        
+
         return None
-    
+
     def get_opportunities(self):
         """获取交易机会（拒绝使用过期机会文件，避免旧信号触发通知/交易）"""
         opportunities = {'us': [], 'hk': []}
@@ -1049,7 +1108,7 @@ class AutoTrader:
             'signal_type': signal_type,
             'llm_conclusion': llm_conclusion,
         }
-    
+
     def should_trade(self, symbol, positions, pending_orders=None):
         """判断是否应该交易"""
         # 标准化股票代码（精确匹配基础代码）
@@ -1061,26 +1120,45 @@ class AutoTrader:
                 sym = sym[3:]
             parts = sym.split('.')
             return parts[0]  # 返回基础代码
-        
+
         sym = normalize(symbol)
-        
+
+        # 当天已有真实 SELL 成交的标的不回补；分批卖出也会触发该买入限制。
+        # 此检查仅由买入前的 should_trade 调用，完全不影响后续分批卖出。
+        today = datetime.now().date().isoformat()
+        try:
+            with open(self.closed_trades_file, 'r') as f:
+                closed_trades = json.load(f) or []
+            for trade in reversed(closed_trades):
+                if trade.get('side') != 'SELL':
+                    continue
+                if not str(trade.get('close_time', '')).startswith(today):
+                    continue
+                if normalize(str(trade.get('symbol', ''))) == sym:
+                    return False, '今日已卖出，禁止回补'
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"⚠️ 读取当日平仓记录失败 {symbol}: {e}")
+            return False, '无法确认当日卖出记录，保守禁止买入'
+
         # 检查是否已持仓
         for pos in positions:
             pos_sym = normalize(pos.get('symbol', ''))
             if sym == pos_sym:
                 return False, f"已持仓({pos.get('symbol')})"
-        
+
         # 检查未完成订单
         if pending_orders:
             pending_normalized = [normalize(s) for s in pending_orders]
             if sym in pending_normalized:
                 return False, f"有未完成订单"
-        
+
         return True, "可以交易"
-    
+
     def execute_trade(self, symbol, side, quantity, price, market='us', force=False, skip_llm=False, score=0, reasons=None, entry_price_override=None, opp=None):
         """执行交易
-        
+
         Args:
             symbol: 标的代码
             side: 买入/卖出
@@ -1100,41 +1178,44 @@ class AutoTrader:
         print(f"数量: {quantity}股")
         print(f"价格: ${price:.2f}")
         print(f"金额: ${quantity * price:,.2f}")
-        
+
+        # 仅在富途确认成交后写入本次执行详情，供平仓记录使用。
+        self._last_execution = None
+
         # ===== LLM分析（下单前分析，基础评分≥70时触发）=====
         # 止损交易跳过LLM分析
         llm_analysis = None
         if not skip_llm:
             llm_analysis = self.llm_analysis_before_trade(symbol, price, market, opp=opp)
-            
+
             # LLM分析失败或被阻止
             if not llm_analysis:
                 print(f"❌ LLM分析不可用，禁止下单")
                 return False
-            
+
             if not llm_analysis.get('passed', True):
                 print(f"❌ LLM分析失败，禁止下单: {llm_analysis.get('llm_reason', '未知错误')}")
                 return False
-            
+
             final_score = llm_analysis.get('final_score', 0)
             llm_reason = llm_analysis.get('llm_reason', '')
-            
+
             print(f"\n🧠 LLM分析结果:")
             print(f"   评分调整: {llm_analysis.get('score_adjust', 0):+d}")
             print(f"   最终评分: {final_score}")
             print(f"   LLM理由: {llm_reason}")
-            
+
             # 如果LLM建议不买入，则取消
             if final_score < 65:
                 print(f"❌ LLM分析不建议买入（评分: {final_score}），取消下单")
                 return False
-        
+
         # 连接Futu
         if not self.trade_ctx:
             if not self.connect_futu():
                 self.send_notification(f"❌ 无法连接Futu，下单失败\n\n标的: {symbol}")
                 return False
-        
+
         # 下单前检查持仓和订单（避免重复购买/下单）
         check_ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
         check_ret, check_data = check_ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
@@ -1148,33 +1229,35 @@ class AutoTrader:
                     sym = sym[3:]
                 parts = sym.split('.')
                 return parts[0]
-            
+
             current_symbols = [normalize(p.code) for p in check_data.itertuples()]
             trade_sym = normalize(symbol)
             if trade_sym in current_symbols and not force:
                 print(f"⚠️ 检查发现已持仓 {symbol}（标准化后: {trade_sym}），取消下单")
                 return False
-            
-            # 检查未完成订单（force=True 时跳过，因为止损/止盈会先撤单）
-            if not force:
+
+            # 卖出即使 force=True 也必须检查未完成订单，避免止损/止盈重复提交。
+            # force 只允许跳过“已持仓”检查，不允许跳过订单幂等保护。
+            if side == 'SELL' or not force:
                 ret, orders = check_ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
                 if ret == RET_OK and orders is not None:
                     pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
-                    pending_symbols = [o.code.replace('US.', '').replace('HK.', '') for o in pending.itertuples()]
+                    pending_symbols = [normalize(o.code) for o in pending.itertuples()]
                     if trade_sym in pending_symbols:
                         print(f"⚠️ {symbol} 有未完成订单，取消下单")
                         return False
-        
+
         # 下单
         success, result = self.place_order(symbol, side, quantity, market)
-        
+
         if success:
             # === 真实成交价回查（防止 quote 价被当成交价；尤其港股 09:30 集合竞价跳价） ===
             quoted_price = price  # 触发判定时读到的报价
             filled_price, filled_qty, fill_status = self._wait_filled_price(
                 order_id=result, market=market, timeout=10, poll_interval=0.5
             )
-            if filled_price and filled_price > 0:
+            # 只有富途明确返回全部成交，才能发送完成通知或写入本地成交记录。
+            if fill_status == 'FILLED_ALL' and filled_price and filled_price > 0:
                 drift_pct = abs(filled_price - quoted_price) / max(quoted_price, 1e-9) * 100
                 if drift_pct >= 0.5:
                     print(f"  ⚠️ 成交价与报价偏差 {drift_pct:.2f}%: quote=${quoted_price:.4f} → fill=${filled_price:.4f}（status={fill_status}），以真实成交价为准")
@@ -1184,8 +1267,16 @@ class AutoTrader:
                 if filled_qty and filled_qty > 0 and filled_qty != quantity:
                     print(f"  ℹ️ 实际成交数量 {filled_qty} 与下单数量 {quantity} 不一致，以实际成交为准")
                     quantity = int(filled_qty)
+                self._last_execution = {
+                    'order_id': str(result), 'side': side, 'symbol': symbol,
+                    'price': float(price), 'quantity': int(quantity), 'status': str(fill_status),
+                }
             else:
-                print(f"  ⚠️ 未拿到真实成交价（status={fill_status}），仍使用报价 ${quoted_price:.4f}（盈亏可能失真）")
+                print(f"  ⚠️ 订单尚未全部成交（status={fill_status}），不发送完成通知、不写成交记录")
+                if side == 'SELL':
+                    self._queue_pending_sell(result, symbol, market, quantity, entry_price_override, reasons)
+                return False
+
 
             # 先算 signal_details，让入场记录和飞书通知用同一个综合评分（final_score）
             signal_details = None
@@ -1211,7 +1302,7 @@ class AutoTrader:
                     entry_risk_targets = None
                 self.save_open_position(symbol, quantity, price, market, score=entry_score, reasons=reasons,
                                         risk_targets=entry_risk_targets)
-            
+
             # 使用新模板发送通知
             from feishu_pusher import FeishuPusher
             pusher = FeishuPusher()
@@ -1315,7 +1406,7 @@ class AutoTrader:
                     except Exception as e:
                         print(f"⚠️ open-positions fallback 失败 {symbol}: {e}")
 
-                # 5) Fallback C：从 closed-trades.json 拿刚刚亲手写的 entry_price/pnl_pct　
+                # 5) Fallback C：从 closed-trades.json 拿刚刚亲手写的 entry_price/pnl_pct
                 if (entry_price <= 0 or sell_pnl_pct == 0.0):
                     try:
                         with open(str(DATA_DIR / 'closed-trades.json'), 'r') as f:
@@ -1371,18 +1462,18 @@ class AutoTrader:
                     order_id=result,
                     timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 )
-        
+
         return success
-    
+
     def check_technical_signals(self, symbol, market='us'):
         """检查技术指标信号（根据市场类型选择指标模块）
-        
+
         美股v1.6要求:
         - MA20 > MA50, 价格 > MA20
         - 技术信号 >= 2
         - 成交量 >= 1.2x（>=1.8x为强放量）
         - RSI < 65
-        
+
         港股v2.0要求:
         - MA20上升趋势, 价格 > MA20
         - RSI 35-70
@@ -1396,9 +1487,9 @@ class AutoTrader:
                 'can_enter': False,
                 'reasons': ["技术指标模块不可用"]
             }
-        
+
         print(f"\n🔍 检查技术指标 [{market.upper()}]: {symbol}")
-        
+
         try:
             if market.lower() == 'us':
                 # 美股指标
@@ -1406,18 +1497,18 @@ class AutoTrader:
             else:
                 # 港股指标
                 ti = HKTechIndicators()
-            
+
             signals = ti.get_entry_signals(symbol)
             ti.close()
-            
+
             # 获取最大分数（美股8分，港股6分）
             max_score = signals.get('max_score', 8)
             print(f"   技术评分: {signals['score']}/{max_score}")
             for reason in signals['reasons']:
                 print(f"   {reason}")
-            
+
             return signals
-            
+
         except Exception as e:
             print(f"❌ 技术指标检查失败: {e}")
             return {
@@ -1425,7 +1516,7 @@ class AutoTrader:
                 'can_enter': False,
                 'reasons': [f"检查失败: {e}"]
             }
-    
+
     def normalize_symbol(self, symbol):
         """标准化股票代码，便于持仓和订单匹配"""
         sym = str(symbol or '').upper()
@@ -1665,57 +1756,57 @@ class AutoTrader:
             'market_sentiment': market_sentiment_data,
             **position_check,
         }
-    
+
     def calculate_stop_loss(self, symbol, multiplier=None, market='us'):
         """计算ATR动态止损
-        
+
         美股v1.6: ATR 1.8-2.0x
         港股v2.0: ATR 1.5x
         """
         if not TECH_INDICATORS_AVAILABLE:
             return None
-        
+
         # 根据市场设置默认multiplier
         if multiplier is None:
             multiplier = 2.0 if market.lower() == 'us' else 1.5
-        
+
         try:
             if market.lower() == 'us':
                 ti = USTechIndicators()
             else:
                 ti = HKTechIndicators()
-            
+
             sl = ti.get_stop_loss(symbol, multiplier)
             ti.close()
             return sl
         except:
             return None
-    
+
     def calculate_take_profit(self, symbol, multiplier=None, market='us'):
         """计算ATR动态止盈
-        
+
         美股v1.6: ATR 4.0-4.5x
         港股v2.0: ATR 3.0x
         """
         if not TECH_INDICATORS_AVAILABLE:
             return None
-        
+
         # 根据市场设置默认multiplier
         if multiplier is None:
             multiplier = 4.0 if market.lower() == 'us' else 3.0
-        
+
         try:
             if market.lower() == 'us':
                 ti = USTechIndicators()
             else:
                 ti = HKTechIndicators()
-            
+
             tp = ti.get_take_profit(symbol, multiplier)
             ti.close()
             return tp
         except:
             return None
-    
+
     def load_staged_reductions(self):
         """读取分级减仓状态。"""
         try:
@@ -1871,6 +1962,8 @@ class AutoTrader:
         current_pl_pct = float(pos_data.get('pl_ratio', 0) or 0)
         full_sym = sym if sym.startswith(('US.', 'HK.')) else f"US.{sym}"
 
+        # 卖出幂等保护：退出逻辑使用 force=True，不能因此绕过未完成订单检查。
+        # 同标的已有可成交订单时直接等待，不撤单重提，避免重复卖出和重复落库。
         try:
             ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
             ret, orders = ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
@@ -1878,36 +1971,32 @@ class AutoTrader:
                 pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
                 for o in pending.itertuples():
                     if self.normalize_symbol(sym) == self.normalize_symbol(o.code):
-                        cancel_ret, cancel_data = ctx.modify_order(
-                            ModifyOrderOp.CANCEL,
-                            str(o.order_id),
-                            0,
-                            0,
-                            trd_env=TrdEnv.SIMULATE,
-                        )
-                        if cancel_ret == RET_OK:
-                            print(f"  撤销挂单: {o.order_id} ({o.code})")
-                        else:
-                            print(f"  ⚠️ 撤单失败 {o.order_id} ({o.code}): {cancel_data}")
+                        print(f"  ⏭️ {full_sym}: 已有未完成订单 {o.order_id}，跳过重复卖出")
+                        return False
         except Exception as e:
-            print(f"  撤单失败: {e}")
+            print(f"  ⚠️ {full_sym}: 未完成订单检查失败，取消本次卖出以避免重复下单: {e}")
+            return False
 
         print(f"  执行{reason}: 卖出 {full_sym} {shares}股 @ ${price:.2f}")
         success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=[reason], entry_price_override=cost_price)
         if success:
+            execution = getattr(self, '_last_execution', {}) or {}
+            shares = int(execution.get('quantity', shares) or shares)
+            price = float(execution.get('price', price) or price)
+            current_pl_pct = ((price - cost_price) / cost_price * 100) if cost_price > 0 else current_pl_pct
             # 2026-06-18 east 修复: execute_trade 内部生成的 LLM 复盘从 self._last_llm_review 取
             llm_review = getattr(self, '_last_llm_review', None)
             # 2026-06-24 east 修复: 补上入场上下文，避免 LLM 复盘拿不到评分/理由
             ec = self._lookup_entry_context(full_sym)
             self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, reason, market,
                                     stop_type=stop_type, llm_review=llm_review,
-                                    entry_score=ec['entry_score'], entry_reasons=ec['entry_reasons'])
+                                    entry_score=ec['entry_score'], entry_reasons=ec['entry_reasons'],
+                                    order_id=execution.get('order_id'))
             # 用完即清，避免污染下一笔
             self._last_llm_review = None
             if shares >= total_shares:
                 self.remove_open_position(full_sym)
                 self.clear_staged_reduction(full_sym)
-                self.recently_closed[sym] = time.time()
         return success
 
     def process_staged_exit(self, pos_data, market='us'):
@@ -2079,7 +2168,7 @@ class AutoTrader:
     def run(self):
         """执行交易检查"""
         print(f"\n{'='*60}")
-        print(f"🤖 自动交易执行器 v2.1 (技术指标版)")
+        print(f"🤖 自动交易执行器 {SYSTEM_VERSION} (技术指标版)")
         print(f"{'='*60}")
         # 连接Futu（如果未连接）
         if not self.trade_ctx:
@@ -2088,31 +2177,32 @@ class AutoTrader:
                 print("❌ 无法连接Futu")
                 return
         print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
+        self.reconcile_pending_sells()
+
         # 检查交易时间
         us_trading = self.check_trading_hours('us')
         hk_trading = self.check_trading_hours('hk')
-        
+
         print(f"\n交易时间状态:")
         print(f"  美股: {'✅ 盘中' if us_trading else '⏸️ 非交易时间'}")
         print(f"  港股: {'✅ 盘中' if hk_trading else '⏸️ 非交易时间'}")
-        
+
         # 获取美股账户信息
         us_account = None
         hk_account = None
-        
+
         if us_trading:
             us_account = self.get_account_and_positions('us')
             if not us_account:
                 print("❌ 无法获取美股账户信息")
                 us_trading = False
-        
+
         if hk_trading:
             hk_account = self.get_account_and_positions('hk')
             if not hk_account:
                 print("❌ 无法获取港股账户信息")
                 hk_trading = False
-        
+
         if not us_trading and not hk_trading:
             # 仅美股非交易时间发送机会通知，港股交易时间正常交易不发
             now_time = datetime.now().time()
@@ -2185,20 +2275,20 @@ class AutoTrader:
 
             print("⏸️ 非交易时间，仅发送机会通知")
             return
-        
+
         # 显示账户状态
         if us_account:
             print(f"\n📊 美股账户状态:")
             print(f"  总资产: ${us_account['total_assets']:,.2f}")
             print(f"  现金: ${us_account['cash']:,.2f}")
             print(f"  持仓: {len(us_account['positions'])}只")
-        
+
         if hk_account:
             print(f"\n📊 港股账户状态:")
             print(f"  总资产: ${hk_account['total_assets']:,.2f}")
             print(f"  现金: ${hk_account['cash']:,.2f}")
             print(f"  持仓: {len(hk_account['positions'])}只")
-        
+
         # 止损/止盈检查：使用策略规则
         # 规则：ATR动态止损(1.8-2.0x)、ATR动态止盈(4.0-4.5x)、RSI超买(>70)、MACD死叉、最大持仓6天
         print(f"\n🔍 检查止损/止盈...")
@@ -2207,12 +2297,12 @@ class AutoTrader:
         stage_reduce_reasons = {}
         positions_to_take_profit = []
         take_profit_reasons = {}
-        
+
         # 修复：根据交易时间检查对应的账户持仓
         # 美股交易时间检查美股持仓，港股交易时间检查港股持仓
         account_to_check = None
         market_to_check = ''
-        
+
         if us_trading:
             account_to_check = us_account
             market_to_check = 'us'
@@ -2224,15 +2314,15 @@ class AutoTrader:
         else:
             account_to_check = {'positions': []}
             print(f"  ⚠️ 非交易时间，不检查持仓")
-        
+
         account = account_to_check if account_to_check else {'positions': []}
-        
+
         for pos in account['positions']:
             sym = pos.get('symbol', '')
             shares = pos.get('shares', 0)
             if shares <= 0:
                 continue
-            
+
             # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
             pl_pct = float(pos.get('pl_ratio', 0))  # 已经是百分比形式：-1.01 表示 -1.01%
             cur_price = self.get_position_price(pos)
@@ -2264,9 +2354,6 @@ class AutoTrader:
             hit_stop = atr_stop_hit or pl_pct < -6 or major_negative
             if hit_stop:
                 # 跳过刚平过的标的（防止重复平仓）
-                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
-                    print(f"    ⏭️ {sym} 刚平过，跳过")
-                    continue
 
                 # 2026-06-23 east 重构：默认直接全平，只有插针场景才走分级
                 # 重大利空 → 一律全平（利空不会反弹，等于送钱）
@@ -2300,22 +2387,16 @@ class AutoTrader:
 
             # 止盈条件：移动止盈保护利润；ATR 趋势止盈保留。
             elif trailing_tp_hit:
-                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
-                    print(f"    ⏭️ {sym} 刚平过，跳过")
-                    continue
                 positions_to_take_profit.append(sym)
                 take_profit_reasons[sym] = trailing_tp_reason
                 print(f"    🎯 {trailing_tp_reason}")
 
             elif atr_tp_hit:
                 # 跳过刚平过的标的
-                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
-                    print(f"    ⏭️ {sym} 刚平过，跳过")
-                    continue
                 positions_to_take_profit.append(sym)
                 take_profit_reasons[sym] = f'ATR动态止盈(现价${cur_price:.2f}≥${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)'
                 print(f"    🎯 触发ATR动态止盈! (现价${cur_price:.2f}≥止盈线${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)")
-        
+
         # 执行分级减仓第一步
         print(f"  📋 分级减仓列表: {positions_to_stage_reduce}")
         if positions_to_stage_reduce:
@@ -2349,9 +2430,6 @@ class AutoTrader:
                 done_syms.add(sym)
 
                 # 2) recently_closed 冷却检查：防止短时间内对同一标的重复SELL
-                if sym in self.recently_closed and time.time() - self.recently_closed[sym] < self.cooldown_seconds:
-                    print(f"  ⏭️ {sym}: 最近已平仓，跳过止盈")
-                    continue
 
                 pos_data = next((p for p in account['positions'] if p.get('symbol','').replace('US.','').replace('HK.','') == sym.replace('US.','').replace('HK.','')), None)
                 if pos_data:
@@ -2364,7 +2442,7 @@ class AutoTrader:
                     price = market_val / shares if shares > 0 else 0
                     # 获取当前股票的盈亏比例
                     current_pl_pct = float(pos_data.get('pl_ratio', 0))
-                    
+
                     # 判断市场
                     if sym.startswith('HK.'):
                         market = 'hk'
@@ -2381,12 +2459,10 @@ class AutoTrader:
                             row = real_pos[real_pos['code'] == full_sym]
                             if len(row) == 0:
                                 print(f"  ⏭️ {sym}: 实时查询无持仓，跳过止盈")
-                                self.recently_closed[sym] = time.time()
                                 continue
                             real_qty = int(row.iloc[0].get('qty', 0) or 0)
                             if real_qty <= 0:
                                 print(f"  ⏭️ {sym}: 实时持仓为0，跳过止盈")
-                                self.recently_closed[sym] = time.time()
                                 continue
                             if real_qty < shares:
                                 print(f"  ⚠️ {sym}: 内存{shares}股 vs 实际{real_qty}股，按实际下单")
@@ -2398,50 +2474,54 @@ class AutoTrader:
                     print(f"  执行止盈: 卖出 {sym} {shares}股 @ ${price:.2f} ({take_profit_reason})")
                     success = self.execute_trade(full_sym, 'SELL', shares, price, market, force=True, skip_llm=True, reasons=[take_profit_reason], entry_price_override=cost_price)
                     if success:
-                        # 保存平仓记录（使用 Futu 的成本价）
+                        execution = getattr(self, '_last_execution', {}) or {}
+                        shares = int(execution.get('quantity', shares) or shares)
+                        price = float(execution.get('price', price) or price)
+                        current_pl_pct = ((price - cost_price) / cost_price * 100) if cost_price > 0 else current_pl_pct
+                        # 保存平仓记录（使用 Futu 的真实成交价和成本价）
                         llm_review = getattr(self, '_last_llm_review', None)
                         # 2026-06-24 east 修复: 同步入场上下文
                         ec = self._lookup_entry_context(full_sym)
                         self.save_closed_trade(full_sym, 'SELL', shares, cost_price, price, current_pl_pct, take_profit_reason, market,
                                                 stop_type='take_profit', llm_review=llm_review,
-                                                entry_score=ec['entry_score'], entry_reasons=ec['entry_reasons'])
+                                                entry_score=ec['entry_score'], entry_reasons=ec['entry_reasons'],
+                                                order_id=execution.get('order_id'))
                         self._last_llm_review = None
                         # 移除入场记录
                         self.remove_open_position(full_sym)
-                        self.recently_closed[sym] = time.time()
-        
+
         # 获取机会
         opportunities = self.get_opportunities()
-        
+
         # 处理美股
         if us_trading and us_account:
             us_high = [o for o in opportunities['us'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', 0)) >= self.config['min_score']]
             print(f"\n🇺🇸 美股高评分({self.config['min_score']}分+): {len(us_high)}只")
-            
+
             for o in us_high[:3]:
                 symbol = o.get('symbol', '')
                 price = o.get('price', 0)
                 score = o.get('final_score', o.get('score', 0))
-                
+
                 # 检查扫描器中LLM是否未通过
                 if not o.get('llm_passed', True):
                     print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
                     continue
-                
+
                 futu_symbol = f"US.{symbol}"
                 should, reason = self.should_trade(futu_symbol, us_account['positions'], us_account.get('pending_orders', []))
-                
+
                 if should:
                     # ===== v1.6 技术指标检查 =====
                     # 检查技术信号（美股: MA趋势、RSI、成交量、MACD）
                     tech_signals = self.check_technical_signals(symbol, market='us')
-                    
+
                     if not tech_signals.get('can_enter', False):
                         print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
                         for r in tech_signals.get('reasons', []):
                             print(f"      {r}")
                         continue  # 跳过不满足技术条件的股票
-                    
+
                     order_plan = self.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
                     if not order_plan.get('can_buy'):
                         print(f"  ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
@@ -2466,40 +2546,40 @@ class AutoTrader:
                             break
                 else:
                     print(f"  ⏭️ {symbol}: {reason}")
-        
+
         # 处理港股
         if hk_trading and hk_account:
             hk_high = [o for o in opportunities['hk'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', o.get('base_score', 0))) >= self.hk_config['min_score']]
             print(f"\n🇭🇰 港股高评分({self.config['min_score']}分+): {len(hk_high)}只")
-            
+
             # 检查港股持仓数限制
             if len(hk_account['positions']) >= self.hk_config.get('max_positions', 10):
                 print(f"⚠️ 港股已达最大持仓数 {self.hk_config.get('max_positions', 10)}，不执行新交易")
                 return
-            
+
             for o in hk_high[:3]:
                 symbol = o.get('symbol', '')
                 price = o.get('price', 0)
                 score = o.get('final_score', o.get('score', o.get('base_score', 0)))
-                
+
                 # 检查扫描器中LLM是否未通过
                 if not o.get('llm_passed', True):
                     print(f"  ⏭️ {symbol}: LLM分析未通过，跳过")
                     continue
-                
+
                 should, reason = self.should_trade(symbol, hk_account['positions'], hk_account.get('pending_orders', []))
-                
+
                 if should:
                     # ===== 港股v2.0 技术指标检查 =====
                     # 检查技术信号（港股: MA20趋势、RSI 35-70、成交量1.5x、增强信号）
                     tech_signals = self.check_technical_signals(symbol, market='hk')
-                    
+
                     if not tech_signals.get('can_enter', False):
                         print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
                         for r in tech_signals.get('reasons', []):
                             print(f"      {r}")
                         continue
-                    
+
                     lot_size = self._get_hk_lot_size(symbol)
                     order_plan = self.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
                     if not order_plan.get('can_buy'):
@@ -2523,14 +2603,14 @@ class AutoTrader:
                             break
                 else:
                     print(f"  ⏭️ {symbol}: {reason}")
-        
+
         print(f"\n{'='*60}")
         print(f"✅ 检查完成")
         print(f"{'='*60}")
-    
+
     def llm_analysis_before_trade(self, symbol, price, market='us', opp=None):
         """下单前的LLM分析
-        
+
         触发条件：基础评分 ≥ 70分
         使用 ModelStudio API (qwen-plus) 进行分析
 
@@ -2541,7 +2621,7 @@ class AutoTrader:
             # 导入LLM调用模块
             sys.path.insert(0, str(STRATEGY_DIR))
             from llm_stock_analyzer import analyze_stock as llm_analyze
-            
+
             # 准备股票数据（从行情获取更完整的数据）
             stock_data = {
                 'symbol': symbol,
@@ -2558,7 +2638,7 @@ class AutoTrader:
                 'sentiment': '中性',
                 'base_score': 75  # 假设基础评分
             }
-            
+
             # 从机会对象补入五源评分明细
             if opp:
                 stock_data['base_score'] = opp.get('score', opp.get('base_score', 75))
@@ -2597,38 +2677,38 @@ class AutoTrader:
                 ctx.close()
             except:
                 pass
-            
+
             # 调用LLM分析
             result = llm_analyze(symbol, stock_data)
-            
+
             print(f"\n🧠 LLM分析结果:")
             print(f"   基础评分: {result.get('base_score', 0)}")
             print(f"   评分调整: {result.get('score_adjust', 0):+d}")
             print(f"   最终评分: {result.get('final_score', 0)}")
             print(f"   理由: {result.get('llm_reason', 'N/A')}")
-            
+
             return result
-            
+
         except Exception as e:
             print(f"❌ LLM分析失败: {e}")
             # LLM分析失败时，必须阻止交易
             return {'final_score': 0, 'llm_reason': f'LLM分析失败: {e}', 'passed': False}
-    
+
     def send_notification(self, message):
         """发送通知到飞书"""
         try:
             keys = load_api_keys()
-            
+
             # 获取token
             url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/"
             res = requests.post(url, json={
                 "app_id": keys['feishu']['appId'],
                 "app_secret": keys['feishu']['appSecret']
             }, timeout=10)
-            
+
             if res.status_code == 200 and res.json().get('code') == 0:
                 token = res.json().get('tenant_access_token')
-                
+
                 # 发送消息
                 url = "https://open.feishu.cn/open-apis/im/v1/messages"
                 headers = {
@@ -2652,58 +2732,58 @@ class AutoTrader:
 
 if __name__ == '__main__':
     import argparse
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--daemon', action='store_true', help='守护进程模式（每秒运行）')
     args = parser.parse_args()
-    
+
     if args.daemon:
         # 守护进程模式
         print("=" * 60)
         print("🚀 自动交易守护进程启动 (每秒检查)")
         print("=" * 60)
-        
+
         trader = AutoTrader()
-        
+
         # 连接一次
         if not trader.connect_futu():
             print("无法连接富途，退出")
             exit(1)
-        
+
         print("✅ 就绪，每秒检查交易机会...")
         print("⚠️ 按 Ctrl+C 停止")
         print("=" * 60)
-        
+
         last_positions = []
-        
+
         while True:
             try:
                 now = datetime.now().strftime("%H:%M:%S")
-                
+
                 # 检查交易时段
                 us_trading = trader.check_trading_hours('us')
                 hk_trading = trader.check_trading_hours('hk')
-                
+
                 if not us_trading and not hk_trading:
                     time.sleep(1)
                     continue
-                
+
                 # 获取账户信息
                 us_account = None
                 hk_account = None
-                
+
                 if us_trading:
                     us_account = trader.get_account_and_positions('us')
                 if hk_trading:
                     hk_account = trader.get_account_and_positions('hk')
-                
+
                 if not us_account and not hk_account:
                     print(f"[{now}] ⚠️ 无可用账户，跳过")
                     time.sleep(1)
                     continue
-                
+
                 print(f"[{now}] ✅ 账户获取成功: 美股={'是' if us_account else '否'}, 港股={'是' if hk_account else '否'}")
-                
+
                 # ===== 止损/止盈检查 =====
                 if us_account and us_account.get('positions'):
                     print(f"[{now}] 🔍 检查止损/止盈...")
@@ -2712,14 +2792,9 @@ if __name__ == '__main__':
                         shares = pos.get('shares', 0)
                         if shares <= 0:
                             continue
-                        
+
                         # 跳过最近尝试过平仓的标的（避免频繁下单）
-                        if sym in trader.recently_closed:
-                            age = time.time() - trader.recently_closed[sym]
-                            if age < 86400:  # 24小时冷却期
-                                print(f"[{now}]   {sym}: 冷却中({age:.0f}s)，跳过")
-                                continue
-                        
+
                         # pl_ratio已经是百分比形式（如-1.01表示-1.01%），不需要转换
                         pl_pct = float(pos.get('pl_ratio', 0))
                         market_val = pos.get('market_val', 0)
@@ -2791,22 +2866,20 @@ if __name__ == '__main__':
                         elif trailing_tp_hit_d:
                             reason_s = trailing_tp_reason_d
                             print(f"[{now}]   🎯 触发{reason_s}")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            success = trader.execute_position_sell(pos, int(shares), reason_s, 'take_profit', 'us')
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
-                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
-                                trader.recently_closed[sym] = time.time()
+                                print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
 
                         elif atr_tp_hit_d:
                             reason_s = f'ATR动态止盈(现价${price:.2f}≥${e_tp}, 浮盈{pl_pct:+.2f}%)'
                             print(f"[{now}]   🎯 触发{reason_s}")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'us', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            success = trader.execute_position_sell(pos, int(shares), reason_s, 'take_profit', 'us')
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
-                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
-                                trader.recently_closed[sym] = time.time()
+                                print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
 
                 # ===== 港股止损/止盈检查（2026-06-23 补上，原本daemon模式遗漏）=====
                 if hk_account and hk_account.get('positions'):
@@ -2817,11 +2890,6 @@ if __name__ == '__main__':
                         if shares <= 0:
                             continue
 
-                        if sym in trader.recently_closed:
-                            age = time.time() - trader.recently_closed[sym]
-                            if age < 86400:
-                                print(f"[{now}]   {sym}: 冷却中({age:.0f}s)，跳过")
-                                continue
 
                         pl_pct = float(pos.get('pl_ratio', 0))
                         market_val = pos.get('market_val', 0)
@@ -2889,31 +2957,29 @@ if __name__ == '__main__':
                         elif trailing_tp_hit_d:
                             reason_s = trailing_tp_reason_d
                             print(f"[{now}]   🎯 触发{reason_s}")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'hk', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            success = trader.execute_position_sell(pos, int(shares), reason_s, 'take_profit', 'hk')
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
-                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
-                                trader.recently_closed[sym] = time.time()
+                                print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
 
                         elif atr_tp_hit_d:
                             reason_s = f'ATR动态止盈(现价HK${price:.2f}≥${e_tp}, 浮盈{pl_pct:+.2f}%)'
                             print(f"[{now}]   🎯 触发{reason_s}")
-                            success = trader.execute_trade(sym, 'SELL', shares, price, 'hk', force=True, skip_llm=True, reasons=[reason_s], entry_price_override=cost_price)
+                            success = trader.execute_position_sell(pos, int(shares), reason_s, 'take_profit', 'hk')
                             if success:
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
-                                print(f"[{now}]   ❌ 止盈失败，将在24小时后重试")
-                                trader.recently_closed[sym] = time.time()
+                                print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
 
                 # 获取机会
                 opportunities = trader.get_opportunities()
-                
+
                 # 美股交易
                 if us_trading and us_account:
                     us_high = [o for o in opportunities['us'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', 0)) >= trader.us_config.get('min_score', 75)]
                     us_positions = [p.get('symbol') for p in us_account.get('positions', [])]
-                    
+
                     for o in us_high[:1]:
                         symbol = o.get('symbol', '')
                         futu_symbol = f"US.{symbol}"
@@ -2921,14 +2987,14 @@ if __name__ == '__main__':
                         if not should:
                             print(f"[{now}] ⏭️ {symbol}: {reason}")
                             continue
-                        
+
                         price = o.get('price', 0)
                         score = o.get('final_score', o.get('score', 0))
                         order_plan = trader.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
                         if not order_plan.get('can_buy'):
                             print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                             continue
-                        
+
                         quantity = order_plan['quantity']
                         print(
                             f"[{now}] 🎯 买入 {symbol} (评分{score}, ${price}, 数量{quantity}, "
@@ -2940,14 +3006,14 @@ if __name__ == '__main__':
                             us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
                             us_account['market_val'] = us_account['total_assets'] * order_plan['after_total_pct'] / 100
                             us_account['cash'] = max(0, us_account.get('cash', 0) - order_plan['order_value'])
-                
+
                 # 港股交易
                 if hk_trading and hk_account:
                     hk_high = [o for o in opportunities['hk'] if o.get('llm_passed', True) and o.get('final_score', o.get('score', o.get('base_score', 0))) >= trader.hk_config.get('min_score', 75)]
                     hk_positions = [p.get('symbol') for p in hk_account.get('positions', [])]
-                    
+
                     print(f"[{now}] 🇭🇰 港股高评分: {len(hk_high)}只, 持仓: {len(hk_positions)}只")
-                    
+
                     for o in hk_high[:1]:
                         symbol = o.get('symbol', '')
                         print(f"[{now}] 🔍 检查 {symbol}")
@@ -2955,18 +3021,18 @@ if __name__ == '__main__':
                         if not should:
                             print(f"[{now}] ⏭️ {symbol}: {reason}")
                             continue
-                        
+
                         price = o.get('price', 0)
                         score = o.get('final_score', o.get('score', o.get('base_score', 0)))
-                        
+
                         print(f"[{now}] 💰 {symbol} 价格: {price}, 评分: {score}")
-                        
+
                         lot_size = trader._get_hk_lot_size(symbol)
                         order_plan = trader.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
                         if not order_plan.get('can_buy'):
                             print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                             continue
-                        
+
                         quantity = order_plan['quantity']
                         print(
                             f"[{now}] 📊 仓位计算: 目标${order_plan['target_value']:,.2f}, "
@@ -2983,9 +3049,9 @@ if __name__ == '__main__':
                             print(f"[{now}] ✅ 买入成功: {symbol}")
                         else:
                             print(f"[{now}] ❌ 买入失败: {symbol}")
-                
+
                 time.sleep(1)
-                
+
             except KeyboardInterrupt:
                 print("\n🛑 守护进程停止")
                 break

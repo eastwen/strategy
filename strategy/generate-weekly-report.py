@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-周报生成器 v3.0 - 动态数据版
+周报生成器 - 统一策略版本
 统计本周交易数据、持仓表现、策略分析
 """
 
@@ -11,7 +11,7 @@ import requests
 from datetime import datetime, timedelta
 import re
 
-from runtime_config import API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR
+from runtime_config import API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR, SYSTEM_VERSION, format_strategy_policy_markdown
 from futu import OpenQuoteContext, RET_OK
 
 # 常量
@@ -391,7 +391,7 @@ class WeeklyReportV3:
 """
         
         # 港股统计
-        report += "### 🇭🇰 港股策略 v2.1\n\n"
+        report += "### 🇭🇰 港股策略 " + SYSTEM_VERSION + "\n\n"
         if hk_stats and hk_stats['total'] > 0:
             report += f"""| 指标 | 数值 |
 |------|------|
@@ -407,7 +407,7 @@ class WeeklyReportV3:
             report += "暂无持仓\n\n"
         
         # 美股统计
-        report += "### 🇺🇸 美股策略 v1.7\n\n"
+        report += "### 🇺🇸 美股策略 " + SYSTEM_VERSION + "\n\n"
         if us_stats and us_stats['total'] > 0:
             report += f"""| 指标 | 数值 |
 |------|------|
@@ -433,32 +433,8 @@ class WeeklyReportV3:
         else:
             report += "暂无持仓\n\n"
 
-        # 策略说明（移到前面）
-        report += """---
-
-## 📦 三、策略说明
-
-### 🇭🇰 港股策略（v2.1 新闻增强版）
-
-**核心规则**
-- 五源共振：国际资讯(25%)、港股公告(20%)、国内社区(25%)、机构/海外社交(20%)、资金异动(10%)
-- 新闻情绪：市场整体情绪(0.52)，正面+15分，负面-10分
-- 情绪监控：VHSI恒指波幅、港股通资金流向、牛熊证比例
-- 开仓规则：评分≥70分，均线金叉，成交量≥1.5倍，RSI 20-80，仓位2-5%
-- 止损规则：单票浮亏≥6%强制止损
-- 止盈规则：收益≥15%分批止盈
-
-### 🇺🇸 美股策略（v1.7 LLM增强版）
-
-**核心规则**
-- 五源共振：国际资讯(25%)、监管公告(20%)、社区情绪(25%)、机构观点(20%)、资金异动(10%)
-- LLM分析：基础评分≥70触发，最终评分≥65才入场
-- 严格择时：MA20>MA50，价格>MA20，技术信号≥2，成交量≥1.8倍，RSI<65
-- 开仓规则：评分≥70分，单票仓位12%，总仓位≤40%
-- 止损规则：ATR动态止损（1.8-2.0倍），浮亏≥6%强制止损
-- 止盈规则：ATR动态止盈（4.0-4.5倍），收益≥15%分批止盈，最大持仓6天
-
-"""
+        # 策略说明
+        report += "---\n\n## 📦 三、策略说明\n\n" + format_strategy_policy_markdown()
 
         # 当前持仓（移到后面）
         report += """---

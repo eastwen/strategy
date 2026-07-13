@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-美股扫描器 v2.0
+美股扫描器（版本由 runtime_config.SYSTEM_VERSION 管理）
 扫描标普500(503只) + 纳斯达克综合指数(3000+只)
 数据源:Finnhub(主) / AlphaVantage(备) / 长桥(备)
 扫描时间:夜盘、盘前、盘中、盘后
@@ -22,6 +22,8 @@ from runtime_config import (
     NEWS_DB_PATH,
     PYTHON_BIN,
     STRATEGY_DIR,
+    STRATEGY_POLICY,
+    SYSTEM_VERSION,
     SKILLS_DIR,
     config_path,
     load_api_keys,
@@ -1000,7 +1002,7 @@ class USScanner:
         self._scan_deadline = scan_started_at + total_budget_seconds
         layer1_budget_seconds = max(60, total_budget_seconds - min_layer2_seconds)
         print(f"\n{'='*60}")
-        print(f"🇺🇸 美股扫描器 v2.0")
+        print(f"🇺🇸 美股扫描器 {SYSTEM_VERSION}")
         print(f"{'='*60}")
         print(f"股票池: 标普500({len(self.sp500)}只) + 纳斯达克({len(self.nasdaq)}只) = {len(self.stocks)}只")
         print(f"扫描时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1118,9 +1120,9 @@ class USScanner:
         }
 
         path = DATA_DIR / 'us-opportunities.json'
-        tmp_path = path + '.tmp'
+        tmp_path = str(path) + '.tmp'
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            os.makedirs(os.path.dirname(str(path)), exist_ok=True)
             # 先写 tmp 再 rename，避免写到一半被kill后文件损坏
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -1240,7 +1242,7 @@ class USScanner:
         finally:
             for future in pending:
                 future.cancel()
-            # 不等待仍处于网络调用中的线程；cron 的60分钟仍是最终硬上限。
+            # 不等待仍处于网络调用中的线程，立即进入 LLM/保存阶段并释放 cron 锁。
             _ex.shutdown(wait=False, cancel_futures=True)
 
         llm_ranked_symbols = []
@@ -1473,7 +1475,7 @@ class USScanner:
         # ===== LLM分析完成后,直接触发交易 =====
         high_score_opportunities = [
             c for c in results 
-            if c.get('llm_passed', True) and c.get('final_score', 0) >= 75
+            if c.get('llm_passed', True) and c.get('final_score', 0) >= STRATEGY_POLICY['us']['min_score']
         ]
 
         # 非交易时段高分信号通知（>=90分）

@@ -16,7 +16,7 @@ from datetime import datetime
 # 添加futu路径
 from runtime_config import (
     API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, LOG_DIR, NEWS_DB_PATH,
-    PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR,
+    PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR, STRATEGY_POLICY, format_strategy_policy_markdown,
 )
 from futu import OpenQuoteContext, OpenSecTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
 
@@ -46,6 +46,10 @@ def load_api_keys():
     """加载API密钥"""
     with open(API_KEYS_FILE, 'r') as f:
         return json.load(f)
+
+def build_strategy_policy_section():
+    return "## 🎯 四、当前策略说明\n\n" + format_strategy_policy_markdown()
+
 
 class ComprehensiveReportV11:
     """综合日报生成器"""
@@ -917,7 +921,7 @@ class ComprehensiveReportV11:
         report += "## 📋 三、本日策略收益\n\n"
 
         # 港股统计
-        report += "### 🇭🇰 港股策略 v2.1\n\n"
+        report += "### 🇭🇰 港股策略 " + STRATEGY_POLICY["hk"]["version"] + "\n\n"
         if hk_stats and hk_stats['total'] > 0:
             report += f"| 指标 | 数值 |\n"
             report += f"|------|------|\n"
@@ -931,7 +935,7 @@ class ComprehensiveReportV11:
             report += "暂无持仓\n\n"
 
         # 美股统计
-        report += "### 🇺🇸 美股策略 v1.7\n\n"
+        report += "### 🇺🇸 美股策略 " + STRATEGY_POLICY["us"]["version"] + "\n\n"
         if us_stats and us_stats['total'] > 0:
             report += f"| 指标 | 数值 |\n"
             report += f"|------|------|\n"
@@ -946,40 +950,7 @@ class ComprehensiveReportV11:
             report += "暂无持仓\n\n"
         report += "\n"
 
-        report += """## 🎯 四、当前策略说明
-
-### 🇭🇰 港股策略（v2.2 新闻增强版）
-
-**核心规则**
-- 五源共振：国际资讯(25%)、港股公告(20%)、国内社区(25%)、机构/海外社交(20%)、资金异动(10%)
-- 新闻情绪：市场整体情绪驱动，正面加分、负面减分（五源真实评分，零硬拆）
-- 情绪监控：VHSI恒指波幅、港股通资金流向、牛熊证比例
-- 开仓规则：综合评分≥80分，MA20上升趋势且价格>MA20，成交量≥1.5倍，RSI 35-70，单票仓位3%
-- 止损规则：ATR动态止损（1.5倍），浮亏≥6%强制止损
-- 止盈规则：ATR动态止盈（3.0倍），RSI>70超买离场，最大持仓10天
-
-### 🇺🇸 美股策略（v1.8 LLM增强版）
-
-**核心规则**
-- 五源共振：国际资讯(25%)、监管公告(20%)、社区情绪(25%)、机构观点(20%)、资金异动(10%)
-- LLM分析：基础评分≥70触发，最终评分≥65才入场
-- 严格择时：MA20>MA50，价格>MA20，技术信号≥2，成交量≥1.8倍，RSI<65
-- 开仓规则：综合评分≥80分，单票仓位8-12%（按评分/VIX动态调整），总仓位随VIX收紧（VIX>30时≤50%）
-- 止损规则：ATR动态止损（1.8-2.0倍），浮亏≥6%强制止损，跌破1.2倍ATR收紧止损线全平
-- 止盈规则：ATR动态止盈（4.0-4.5倍），收益≥15%分批止盈，最大持仓6天
-
-**版本变更记录**
-
-| 版本号 | 市场 | 更新时间 | 变更内容 |
-|--------|------|----------|----------|
-| v2.2 | 港股 | 2026-07-09 | 评分门槛提升至80，RSI区间收窄至35-70，ATR动态止损(1.5x)/止盈(3.0x) |
-| v1.8 | 美股 | 2026-07-09 | 评分门槛提升至80，VIX动态仓位收紧，1.2x ATR收紧止损线 |
-| v2.1 | 港股 | 2026-04-02 | 新闻情绪注入，动态行业权重 |
-| v1.7 | 美股 | 2026-04-02 | LLM增强分析，严格择时 |
-| v1.4 | 五源评分 | 2026-07-02 | 五源真实评分替代硬拆base_score，全数据源接入备用源 |
-| v1.0 | 港股/美股 | 2026-03-22 | 初始版本上线 |
-
-"""
+        report += build_strategy_policy_section()
 
         report += "## 🔍 五、当日交易记录\n\n"
 
@@ -1459,7 +1430,7 @@ def sync_futu_data():
     try:
         print("🔄 同步富途账户数据...")
         result = subprocess.run(
-            [str(PYTHON_BIN),
+            [sys.executable,
              str(STRATEGY_DIR / 'sync-futu-account.py')],
             capture_output=True, text=True, timeout=60
         )
