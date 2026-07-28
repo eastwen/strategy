@@ -11,8 +11,10 @@ import requests
 import os
 import json
 import re
+import html
 import sqlite3
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from runtime_config import NEWS_DB_PATH, load_api_keys
 
@@ -89,94 +91,200 @@ def format_news_block(news_items):
     return '\n'.join(lines)
 
 
-# futu-stock-digest 预处理：调 futu /news_search API 拿新闻，做事件提炼+方向判断
+# futu-stock-digest 预处理：只拉取富途新闻并去重；方向由当前 LLM 判断。
 FUTU_NEWS_API = 'https://ai-news-search.futunn.com/news_search'
-_DIGEST_POS_KEYWORDS = ['涨', '增', '超预期', '利好', '突破', '获批', '回购', '加仓', '上调', '买入', '强劲', '增长', '盈利', '合作', '中标', '反弹', '牛市']
-_DIGEST_NEG_KEYWORDS = ['跌', '减', '亏损', '利空', '破位', '调查', '诉讼', '召回', '下调', '卖出', '警告', '下滑', '违约', '退市', '暴跌', '熊市', '制裁']
 
 
-def fetch_futu_digest(symbol: str, market: str = 'us', size: int = 10):
-    """调 futu /news_search API 拿新闻，做事件提炼+方向判断（futu-stock-digest 预处理）。
+def _clean_futu_title(value):
+    return re.sub(r'<[^>]+>', '', html.unescape(str(value or ''))).strip()
 
-    返回: {direction, conclusion, signals, evidence} 或 None（失败时）。
-    direction: 'bullish' / 'bearish' / 'neutral'
-    """
+
+def _futu_title_key(value):
+    return re.sub(r'[^a-z0-9\u4e00-\u9fff]+', '', _clean_futu_title(value).lower())
+
+
+def _futu_titles_similar(left, right):
+    a, b = _futu_title_key(left), _futu_title_key(right)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 12:
+        return False
+    if SequenceMatcher(None, a, b).ratio() >= 0.68:
+        return True
+    tokens_a = set(re.findall(r'[a-z0-9]+', _clean_futu_title(left).lower()))
+    tokens_b = set(re.findall(r'[a-z0-9]+', _clean_futu_title(right).lower()))
+    return bool(tokens_a and tokens_b and len(tokens_a & tokens_b) / len(tokens_a | tokens_b) >= 0.60)
+
+
+def _digest_company_aliases(company_name):
+    name = _clean_futu_title(company_name).lower().strip()
+    if not name:
+        return set()
+    aliases = {name}
+    trimmed = re.sub(r'\b(inc|incorporated|corp|corporation|co|company|ltd|limited|plc|holdings)\.?$', '', name).strip()
+    if trimmed:
+        aliases.add(trimmed)
+        first = trimmed.split()[0] if trimmed.split() else ''
+        if len(first) >= 4:
+            aliases.add(first)
+    return aliases
+
+
+def _futu_highlight_aliases(items, raw_symbol):
+    aliases = set()
+    ticker = re.escape(raw_symbol)
+    pattern = re.compile(r'([\u4e00-\u9fff]{2,10})\s*[（(]?\s*<em>\s*' + ticker + r'\s*</em>', re.I)
+    for item in items:
+        match = pattern.search(str(item.get('title') or ''))
+        if match:
+            aliases.add(match.group(1).lower())
+    return aliases
+
+
+def _is_futu_digest_relevant(raw_title, raw_symbol, aliases):
+    text = str(raw_title or '')
+    if re.search(rf'<em>\s*{re.escape(raw_symbol)}\s*</em>', text, re.I):
+        return True
+    clean = _clean_futu_title(text).lower()
+    for alias in aliases:
+        if len(alias) >= 4 and alias in clean:
+            return True
+        if alias and re.fullmatch(r'[\u4e00-\u9fff]{2,10}', alias) and alias in clean:
+            return True
+    return len(raw_symbol) > 2
+
+
+def fetch_futu_digest(symbol: str, market: str = 'us', size: int = 10, company_name: str = ''):
+    """Fetch and dedupe Futu news; semantic direction is decided by the current LLM."""
     if not symbol:
         return None
     raw = symbol.split('.')[-1] if '.' in symbol else symbol
     try:
-        r = requests.get(FUTU_NEWS_API, params={
-            'keyword': raw,
-            'size': size,
-            'news_type': 1,
-            'lang': 'zh-CN',
-            'sort_type': 2,
+        response = requests.get(FUTU_NEWS_API, params={
+            'keyword': raw, 'size': size, 'news_type': 1, 'lang': 'zh-CN', 'sort_type': 2,
         }, headers={'User-Agent': 'futu-stock-digest/0.0.2 (Skill)'}, timeout=8)
-        if r.status_code != 200:
+        if response.status_code != 200:
             return None
-        data = r.json() or {}
+        data = response.json() or {}
         if str(data.get('code', -1)) != '0':
             return None
         items = data.get('data') or []
-        if not items:
-            return None
-
-        # 事件提炼：取标题，去重
-        titles = []
-        seen = set()
+        aliases = _digest_company_aliases(company_name) | _futu_highlight_aliases(items, raw)
+        events, filtered_out = [], 0
         for item in items:
-            t = (item.get('title') or '').strip()
-            if t and t not in seen:
-                titles.append(t)
-                seen.add(t)
+            if not _is_futu_digest_relevant(item.get('title'), raw, aliases):
+                filtered_out += 1
+                continue
+            title = _clean_futu_title(item.get('title'))
+            if not title or any(_futu_titles_similar(title, event['title']) for event in events):
+                continue
+            events.append({'title': title, 'url': str(item.get('url') or '').strip()})
+        if not events:
+            return None
+        return {
+            'direction': 'pending_llm',
+            'conclusion': f'富途返回{len(items)}条，过滤{filtered_out}条无关结果，合并重复报道后保留{len(events)}个事件，等待当前LLM统一判断方向和影响',
+            'signals': [event['title'] for event in events[:max(3, min(size, 10))]],
+            'evidence': [event['title'] + (f" ({event['url']})" if event['url'] else '') for event in events[:3]],
+            'filtered_out': filtered_out,
+            'company_aliases': sorted(aliases),
+        }
+    except Exception:
+        return None
+
+
+def fetch_multi_source_news_digest(symbol: str, market: str = 'us',
+                                   company_name: str = '', size: int = 10):
+    """Use the shared news collectors as an LLM-only fallback; ignore their score."""
+    if not symbol:
+        return None
+    try:
+        from four_source_scorer import score_international_news
+
+        result = score_international_news(
+            symbol=symbol,
+            market=market,
+            cap=25,
+            company_name=company_name,
+        )
+        raw = result.get('raw', {}) or {}
+        events = raw.get('events', []) or []
+        titles = []
+        evidence = []
+        sources = set()
+        for event in events:
+            title = str(event.get('title') or '').strip()
+            if not title:
+                continue
+            titles.append(title)
+            event_sources = event.get('sources', []) or []
+            sources.update(str(source) for source in event_sources if source)
+            source_text = '/'.join(str(source) for source in event_sources if source)
+            evidence.append(f"{title} [{source_text}]" if source_text else title)
+            if len(titles) >= size:
+                break
         if not titles:
             return None
-
-        # 方向判断：关键词投票
-        all_text = ' '.join(titles)
-        pos_hits = sum(1 for w in _DIGEST_POS_KEYWORDS if w in all_text)
-        neg_hits = sum(1 for w in _DIGEST_NEG_KEYWORDS if w in all_text)
-        if pos_hits > neg_hits and pos_hits > 0:
-            direction = 'bullish'
-        elif neg_hits > pos_hits and neg_hits > 0:
-            direction = 'bearish'
-        else:
-            direction = 'neutral'
-
-        # 信号列表：取前 4 条标题作为关键信号
-        signals = titles[:4]
-
-        # 证据：取前 3 条带 URL
-        evidence = []
-        for item in items[:3]:
-            t = (item.get('title') or '').strip()
-            u = (item.get('url') or '').strip()
-            if t:
-                evidence.append(f"{t}" + (f" ({u})" if u else ""))
-
-        conclusion = f"futu新闻摘要({len(titles)}条): 方向={direction}, 看多信号{pos_hits}个/看空信号{neg_hits}个"
-
         return {
-            'direction': direction,
-            'conclusion': conclusion,
-            'signals': signals,
-            'evidence': evidence,
+            'origin': 'multi_source_fallback',
+            'direction': 'pending_llm',
+            'conclusion': (
+                f"富途主查询无结果；备用资讯池合并去重后保留{len(titles)}个事件，"
+                "等待当前LLM统一判断方向和影响"
+            ),
+            'signals': titles,
+            'evidence': evidence[:3],
+            'sources': sorted(sources),
         }
     except Exception:
         return None
 
 
 def format_digest_block(digest):
-    """把 futu-stock-digest 预处理结果格式化为 prompt 能读的文本块。"""
     if not digest:
         return '无futu新闻摘要'
-    lines = [f"方向: {digest['direction']}"]
-    lines.append(f"摘要: {digest['conclusion']}")
+    direction = digest.get('direction', 'pending_llm')
+    lines = [f"方向: {'由当前LLM判断' if direction == 'pending_llm' else direction}", f"摘要: {digest.get('conclusion', '')}"]
     if digest.get('signals'):
-        lines.append("关键信号:")
-        for s in digest['signals']:
-            lines.append(f"  - {s}")
+        lines.append('关键信号:')
+        lines.extend(f"  - {item}" for item in digest['signals'])
+    if digest.get('evidence'):
+        lines.append('证据链接:')
+        lines.extend(f"  - {item}" for item in digest['evidence'][:3])
     return '\n'.join(lines)
+
+
+def build_second_layer_news_digest(events, limit=10):
+    """Build an LLM news block from the exact scored international-news pool."""
+    usable = [event for event in (events or []) if isinstance(event, dict) and event.get('title')]
+    if not usable:
+        return None
+    ranked = sorted(
+        usable,
+        key=lambda event: max(
+            float(event.get('positive_strength', 0) or 0),
+            float(event.get('negative_strength', 0) or 0),
+        ),
+        reverse=True,
+    )[:limit]
+    signals = [_clean_futu_title(event.get('title')) for event in ranked]
+    evidence = []
+    for event, title in zip(ranked[:3], signals[:3]):
+        sources = event.get('sources') or event.get('source') or ''
+        source_text = ', '.join(sources) if isinstance(sources, list) else str(sources)
+        evidence.append(f"{title}{f'（{source_text}）' if source_text else ''}")
+    return {
+        'direction': 'pending_llm',
+        'conclusion': (
+            f'第二层国际资讯已合并去重{len(usable)}个事件，'
+            '当前LLM基于同源事件池判断方向和影响'
+        ),
+        'signals': signals,
+        'evidence': evidence,
+        'origin': 'second_layer_news',
+    }
 
 
 # ===== 换模型只改这里 =====
@@ -667,14 +775,26 @@ class LLMStockAnalyzer:
 
         market_data = dict(market_data)  # 避免修改调用方原始 dict
 
-        # 先用 futu-stock-digest 预处理：拿摘要+方向判断
-        market = market_data.get('market', 'us')
-        digest = fetch_futu_digest(symbol, market)
+        # 优先复用第二层实际评分过的国际资讯事件，确保评分和 LLM 同源。
+        digest = build_second_layer_news_digest(market_data.get('second_layer_news_events'))
         if digest:
             market_data['futu_digest'] = digest
         else:
-            # futu 没数据时，退回 news.db 原始新闻
-            market_data['recent_news'] = fetch_recent_news(symbol, hours=24, limit=8)
+            market = market_data.get('market', 'us')
+            digest = fetch_futu_digest(
+                symbol, market, company_name=market_data.get('company_name') or market_data.get('name', '')
+            )
+            if not digest:
+                digest = fetch_multi_source_news_digest(
+                    symbol,
+                    market,
+                    company_name=market_data.get('company_name') or market_data.get('name', ''),
+                )
+            if digest:
+                market_data['futu_digest'] = digest
+            else:
+                # 所有实时资讯源均无数据时，最后退回 news.db 原始新闻。
+                market_data['recent_news'] = fetch_recent_news(symbol, hours=24, limit=8)
 
         prompt = self._build_prompt(symbol, market_data)
         content = self.client.call(prompt, max_tokens=800, temperature=0.3)
@@ -694,12 +814,17 @@ class LLMStockAnalyzer:
         market = data.get('market', 'us')
         market_name = '美股' if market == 'us' else '港股'
 
-        # 优先用 futu-stock-digest 预处理摘要，没有时退回原始新闻
+        # 优先使用富途新闻事件池，没有时退回原始新闻。
         digest = data.get('futu_digest')
         if digest:
             news_block = format_digest_block(digest)
             news_count = len(digest.get('signals', []))
-            news_section_title = f"futu新闻摘要（方向: {digest.get('direction', 'N/A')}）"
+            if digest.get('origin') == 'second_layer_news':
+                news_section_title = '第二层国际资讯事件池（与评分同源，由本次LLM分析方向与影响）'
+            elif digest.get('origin') == 'multi_source_fallback':
+                news_section_title = '多源备用新闻事件池（仅供LLM验真，不参与基础评分）'
+            else:
+                news_section_title = '富途新闻事件池（由本次LLM分析方向与影响）'
         else:
             recent_news = data.get('recent_news') or []
             news_block = format_news_block(recent_news)
@@ -712,6 +837,27 @@ class LLMStockAnalyzer:
         sc = data.get('score_community', 0)
         si = data.get('score_institution', 0)
         sk = data.get('score_capital', 0)
+        neutral_scores = {
+            'news': data.get('neutral_news', 12.5),
+            'announce': data.get('neutral_announce', 10.0),
+            'community': data.get('neutral_community', 12.5),
+            'institution': data.get('neutral_institution', 10.0),
+            'capital': data.get('neutral_capital', 5.0),
+        }
+        adjustments = {
+            'news': data.get('adjust_news'),
+            'announce': data.get('adjust_announce'),
+            'community': data.get('adjust_community'),
+            'institution': data.get('adjust_institution'),
+            'capital': data.get('adjust_capital'),
+        }
+        availability = {
+            'news': data.get('available_news', False),
+            'announce': data.get('available_announce', False),
+            'community': data.get('available_community', False),
+            'institution': data.get('available_institution', False),
+            'capital': data.get('available_capital', False),
+        }
         cap_dir = data.get('capital_direction', '')
         bull_pct = data.get('community_bull_pct', 0)
         bear_pct = data.get('community_bear_pct', 0)
@@ -754,20 +900,79 @@ class LLMStockAnalyzer:
             except (TypeError, ValueError):
                 return '未覆盖'
 
+        evidence_news = compact_evidence(data.get('evidence_news'))
         evidence_announce = compact_evidence(data.get('evidence_announce'))
         evidence_community = compact_evidence(data.get('evidence_community'))
         evidence_institution = compact_evidence(data.get('evidence_institution'))
         evidence_capital = compact_evidence(data.get('evidence_capital'))
 
+        def source_score(key, label, score, cap):
+            if not availability[key]:
+                return f"{label}未覆盖"
+            neutral = float(neutral_scores[key])
+            adjustment = adjustments[key]
+            if adjustment is None:
+                adjustment = float(score) - neutral
+            return f"{label}{score}/{cap}（中性{neutral:g}，较中性{float(adjustment):+.1f}）"
+
         five_source_line = (
-            f"基础评分: {data.get('base_score', 70)}分"
-            f"（五源拆分: 资讯{sn}/25 + 公告{sa}/20 + 社区{sc}/25 + 机构{si}/20 + 资金{sk}/10）"
+            f"基础评分: {data.get('base_score', 70)}分；五源约50分为中性\n"
+            + " | ".join((
+                source_score('news', '资讯', sn, 25),
+                source_score('announce', '公告', sa, 20),
+                source_score('community', '社区', sc, 25),
+                source_score('institution', '机构', si, 20),
+                source_score('capital', '资金', sk, 10),
+            ))
         )
         cap_line = f"资金异动: {cap_dir or 'N/A'}"
         if post_count and (bull_pct or bear_pct):
             cap_line += (
                 f" | 社区多空: 看涨{bull_pct:.0%} / 看跌{bear_pct:.0%} ({post_count}条)"
             )
+
+        if market == 'hk':
+            score_context = (
+                f"港股综合基础评分: {data.get('base_score', 70)}分"
+                "（本次LLM仅在-10到+10范围验真调整）\n"
+                + five_source_line
+            )
+            market_context = (
+                "港股市场环境:\n"
+                f"- 综合情绪: {format_metric(data.get('hk_sentiment_score'), 1)}/100"
+                f" | VHSI: {format_metric(data.get('vhsi'), 2)} {data.get('vhsi_sentiment') or ''}\n"
+                f"- 港股通资金流: {format_metric(data.get('hk_capital_flow'), 2, '亿港元')}"
+                f" {data.get('hk_flow_sentiment') or ''}"
+                f" | 牛熊证比例: {format_metric(data.get('bull_bear_ratio'), 2)}"
+                f" {data.get('warrant_sentiment') or ''}\n"
+                f"- 指数归属: {data.get('index_membership') or '未覆盖'}"
+                f" | 行情源: {data.get('quote_source') or '未覆盖'}"
+                f" | 市场新闻情绪均值: {format_metric(data.get('market_news_sentiment'), 2)}"
+            )
+            source_context = (
+                "港股五源真实证据:\n"
+                f"- 国际资讯: {evidence_news if availability['news'] else '资讯未覆盖'}\n"
+                f"- 官方公告: {evidence_announce if availability['announce'] else '公告未覆盖'}\n"
+                f"- 社区情绪: {evidence_community if availability['community'] else '社区未覆盖'}\n"
+                f"- 机构观点: {evidence_institution if availability['institution'] else '机构未覆盖'}\n"
+                f"- 资金异动: {evidence_capital if availability['capital'] else '资金未覆盖'}"
+            )
+            evaluation_basis = (
+                '港股综合基础评分 + 技术面 + 轻量基本面 + '
+                '港股市场环境 + 五源真实证据 + 上述新闻事件'
+            )
+        else:
+            score_context = five_source_line
+            market_context = cap_line + f"\n新闻情绪均值: {data.get('sentiment', 'N/A')}"
+            source_context = (
+                "五源真实证据:\n"
+                f"- 国际资讯: {evidence_news if availability['news'] else '资讯未覆盖'}\n"
+                f"- 官方公告: {evidence_announce if availability['announce'] else '公告未覆盖'}\n"
+                f"- 社区情绪: {evidence_community if availability['community'] else '社区未覆盖'}\n"
+                f"- 机构观点: {evidence_institution if availability['institution'] else '机构未覆盖'}\n"
+                f"- 资金异动: {evidence_capital if availability['capital'] else '资金未覆盖'}"
+            )
+            evaluation_basis = '技术面 + 轻量基本面 + 五源评分 + 上述新闻事件'
 
         return f"""你是专业的{market_name}股票分析师。
 
@@ -792,20 +997,15 @@ ATR: {data.get('atr', 'N/A')}
 - EPS: {format_metric(data.get('trailing_eps'))} | 营收增长: {format_metric(data.get('revenue_growth'), 2, '%')} | 盈利增长: {format_metric(data.get('earnings_growth'), 2, '%')}
 - 利润率: {format_metric(data.get('profit_margin'), 2, '%')} | 营收: {format_large(data.get('revenue'))} | 净利润: {format_large(data.get('net_profit'))}
 
-{five_source_line}
-{cap_line}
-新闻情绪均值: {data.get('sentiment', 'N/A')}
+{score_context}
+{market_context}
 
-非新闻维度真实证据:
-- 官方公告: {evidence_announce}
-- 社区情绪: {evidence_community}
-- 机构观点: {evidence_institution}
-- 资金异动: {evidence_capital}
+{source_context}
 
 {news_section_title}:
 {news_block}
 
-请结合技术面 + 轻量基本面 + 五源评分 + 上述新闻事件综合判断；未覆盖字段必须忽略，不得补写或推测。给出：
+请结合{evaluation_basis}综合判断；未覆盖字段必须忽略，不得补写或推测。给出：
 1. 评分调整（-10到+10），按以下场景对号入座：
 
    🔴 减分场景（-3 到 -8）：
@@ -815,7 +1015,7 @@ ATR: {data.get('atr', 'N/A')}
    - 成交量萎缩，动能减弱
    - 资金净流出 + 社区看跌占比高（>50%）
    - 当日涨幅明显且由单一消息事件驱动（如财报、并购、政策），需判断该利好是否已被市场充分定价、后续是否还有上涨空间；若判断利好已透支，给-3到-5分
-   - 重大利空（诉讼/调查/召回/调低评级）请加大负分（-8 到 -10）
+   - 重大利空（诉讼/调查/召回/调低评级）请加大负分（-9 到 -10）
 
    🟢 加分场景（+3 到 +8）：
    - 财报超预期且市场反应不足
@@ -823,7 +1023,7 @@ ATR: {data.get('atr', 'N/A')}
    - 新业务/新订单/新政策直接受益
    - 技术突破配合成交量放大
    - 资金净流入 + 社区看涨占比高（>60%）
-   - 重大利好（超预期/回购/中标/获批）请加大正分（+8 到 +10）
+   - 重大利好（超预期/回购/中标/获批）请加大正分（+9 到 +10）
 
    ⚪ 中性场景（0 到 ±2）：已涨过但仍在竞争市场、技术面中立、无明显驱动事件
 
@@ -832,13 +1032,15 @@ ATR: {data.get('atr', 'N/A')}
    - 必须结合至少一项技术面或资金面证据确认或否定新闻影响；
    - 必须指出一个基于输入数据的主要风险或不确定性；
    - 只使用输入中明确提供的事实，不得编造公告、评级、资金或技术信号；
+   - 新闻中出现的盘前、盘后、收盘、交易日等时段必须原样保留；不得把盘前/盘后涨跌改写为盘中回落，也不得把不同交易日串成同一日内走势；
    - 不要只复述新闻标题，不要使用“前景良好”“值得关注”等空泛结论。
+   - 富途新闻事件池只提供原始事件；不要沿用标题关键词数量作为结论，必须自行判断事件方向、真实性与影响。
 
 ⚠️ 判分原则：如果理由中出现”无突破/无明显/横盘/已被透支/动能减弱/涨过”等关键词，必须给负分；不要出现”理由偏弱但调整为正分”的矛盾情况。
 
 格式：只返回一个JSON对象，不要Markdown代码块，不要额外文字。
-例如：{{"adjust":6,"reason":"Vera CPU与H200许可构成明确催化，成交量放大及资金净流入确认上涨动能，但利好可能已部分计价，需防范冲高回落"}}
-或：{{"adjust":-7,"reason":"SEC调查与评级下调形成明确利空，价格跌破MA20且资金持续流出确认弱势，短期仍有进一步下探风险"}}
+例如：{{"adjust":8,"reason":"Vera CPU与H200许可构成明确催化，成交量放大及资金净流入确认上涨动能，但利好可能已部分计价，需防范冲高回落"}}
+或：{{"adjust":-10,"reason":"SEC调查与评级下调形成明确利空，价格跌破MA20且资金持续流出确认弱势，短期仍有进一步下探风险"}}
 adjust必须是-10到+10之间的整数。
 
 直接回复："""

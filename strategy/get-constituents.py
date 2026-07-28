@@ -1,76 +1,78 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
-"""
-获取指数成分股列表
-使用富途API获取恒生指数、恒生科技指数成分股
-"""
+#!/usr/bin/env python3
+"""每周刷新港股指数成分股，只保留当前官方成分股。"""
 
-import sys
-sys.path.insert(0, '/home/admin/.openclaw/workspace-stock/futu-venv/lib/python3.14/site-packages')
+import argparse
+import json
+import os
+from datetime import datetime
+from pathlib import Path
 
 from futu import OpenQuoteContext, RET_OK
+from runtime_config import FUTU_HOST, FUTU_PORT, STRATEGY_DIR
 
-def get_index_constituents(index_code, index_name):
-    """获取指数成分股"""
-    quote_ctx = OpenQuoteContext('127.0.0.1', 11111)
-    
-    try:
-        # 获取指数成分股
-        ret, data = quote_ctx.get_plate_stock(index_code)
-        
-        if ret == RET_OK:
-            stocks = []
-            for _, row in data.iterrows():
-                stocks.append({
-                    'code': row['code'],
-                    'name': row['stock_name']
-                })
-            print(f"✅ {index_name}: {len(stocks)}只")
-            return stocks
-        else:
-            print(f"❌ 获取{index_name}失败: {data}")
-            return []
-    finally:
-        quote_ctx.close()
+POOL_PATH = STRATEGY_DIR / 'hk-index-constituents.json'
+
+
+def _codes(values):
+    result = []
+    for value in values or []:
+        code = value.get('code') if isinstance(value, dict) else value
+        code = str(code or '').strip().upper()
+        if code and code.startswith('HK.'):
+            result.append(code)
+    return list(dict.fromkeys(result))
+
+
+def fetch_index_constituents(ctx, index_code, index_name):
+    ret, data = ctx.get_plate_stock(index_code)
+    if ret != RET_OK:
+        raise RuntimeError(f'获取{index_name}失败: {data}')
+    codes = _codes(data['code'].tolist())
+    print(f'✅ {index_name}: {len(codes)}只')
+    return codes
+
+
+def build_updated_pool(hsi, hstech):
+    if len(hsi) < 50 or len(hstech) < 20:
+        raise ValueError(f'新名单数量异常: 恒指{len(hsi)}、恒科{len(hstech)}')
+    all_symbols = list(dict.fromkeys(hsi + hstech))
+    return {
+        'hsi': hsi,
+        'hstech': hstech,
+        'hk_all': all_symbols,
+        'overlap_count': len(set(hsi) & set(hstech)),
+        'unique_count': len(all_symbols),
+        'updated_at': datetime.now().isoformat(),
+        'update_source': 'Futu HK.800000/HK.800700',
+    }
+
+
+def atomic_write(path, payload):
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    os.replace(tmp, path)
+
 
 def main():
-    print("="*60)
-    print("获取指数成分股列表")
-    print("="*60)
-    
-    # 恒生指数
-    hsi_stocks = get_index_constituents('HK.800000', '恒生指数')
-    
-    # 恒生科技指数
-    hstech_stocks = get_index_constituents('HK.800700', '恒生科技指数')
-    
-    # 合并去重
-    all_codes = set()
-    all_stocks = []
-    
-    for s in hsi_stocks + hstech_stocks:
-        if s['code'] not in all_codes:
-            all_codes.add(s['code'])
-            all_stocks.append(s)
-    
-    print(f"\n合并去重后: {len(all_stocks)}只")
-    
-    # 保存到文件
-    import json
-    data = {
-        'hsi': hsi_stocks,
-        'hstech': hstech_stocks,
-        'all': all_stocks
-    }
-    
-    with open('/home/admin/.openclaw/workspace-stock/data/hk-index-constituents.json', 'w') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    
-    print(f"✅ 已保存到: data/hk-index-constituents.json")
-    
-    # 打印前10只
-    print("\n前10只股票:")
-    for s in all_stocks[:10]:
-        print(f"  {s['code']}: {s['name']}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
+    try:
+        hsi = fetch_index_constituents(ctx, 'HK.800000', '恒生指数')
+        hstech = fetch_index_constituents(ctx, 'HK.800700', '恒生科技指数')
+    finally:
+        ctx.close()
+    payload = build_updated_pool(hsi, hstech)
+    print(
+        f"📊 最终港股池: 恒指与恒科去重后共{payload['unique_count']}只"
+    )
+    if args.dry_run:
+        print('🧪 dry-run：未写入文件')
+        return
+    atomic_write(POOL_PATH, payload)
+    print(f'💾 已原子更新: {POOL_PATH}')
+
 
 if __name__ == '__main__':
     main()

@@ -36,6 +36,8 @@ class USMarketSentiment:
         self.put_call_detail = None
         self.spx = None
         self.spx_change = None
+        self.ndx = None
+        self.dji = None
 
     def get_vix(self):
         """获取VIX恐慌指数（Yahoo Finance）"""

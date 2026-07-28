@@ -16,6 +16,7 @@ import json
 import time
 import requests
 from datetime import datetime, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
 
 from runtime_config import (
     DATA_DIR,
@@ -172,14 +173,151 @@ class AutoTrader:
             except:
                 return None
 
-            # 找到并移除
-            result = None
-            positions = [p for p in positions if p.get('symbol') != symbol]
+            target = self.normalize_symbol(symbol)
+            positions = [
+                p for p in positions
+                if self.normalize_symbol(p.get('symbol', '')) != target
+            ]
 
             with open(self.open_positions_file, 'w') as f:
                 json.dump(positions, f, ensure_ascii=False, indent=2)
         except:
             pass
+
+    def reconcile_open_positions(self, market, actual_positions):
+        """以富途真实持仓为准，同步并补齐本地风控状态。"""
+        market = str(market or '').lower()
+        if market not in ('us', 'hk'):
+            return {'removed': [], 'updated': [], 'added': []}
+
+        actual = {}
+        for pos in actual_positions or []:
+            symbol = str(pos.get('symbol', '') or '')
+            if not symbol:
+                continue
+            try:
+                shares = int(float(pos.get('shares', 0) or 0))
+            except (TypeError, ValueError):
+                shares = 0
+            if shares > 0:
+                actual[self.normalize_symbol(symbol)] = {
+                    'symbol': symbol,
+                    'shares': shares,
+                    'cost_price': float(pos.get('cost_price', 0) or 0),
+                    'pl_ratio': float(pos.get('pl_ratio', 0) or 0),
+                }
+
+        try:
+            with open(self.open_positions_file, 'r') as f:
+                positions = json.load(f) or []
+        except FileNotFoundError:
+            positions = []
+        except Exception as e:
+            print(f"⚠️ 读取本地开仓状态失败: {e}")
+            return {'removed': [], 'updated': [], 'added': []}
+
+        removed = []
+        updated = []
+        added = []
+        kept = []
+        local_symbols = set()
+        for record in positions:
+            symbol = str(record.get('symbol', '') or '')
+            record_market = str(record.get('market', '') or '').lower()
+            if record_market not in ('us', 'hk'):
+                record_market = 'hk' if symbol.upper().startswith('HK.') else 'us'
+            if record_market != market:
+                kept.append(record)
+                continue
+
+            normalized = self.normalize_symbol(symbol)
+            local_symbols.add(normalized)
+            actual_record = actual.get(normalized)
+            remaining = actual_record['shares'] if actual_record else 0
+            if remaining <= 0:
+                removed.append(symbol)
+                continue
+
+            try:
+                old_shares = int(float(record.get('shares', 0) or 0))
+            except (TypeError, ValueError):
+                old_shares = 0
+            if old_shares != remaining:
+                record['shares'] = remaining
+                updated.append(symbol)
+            kept.append(record)
+
+        # 延迟成交或手工成交可能使富途有真实持仓而本地没有入场记录。
+        for normalized, actual_record in actual.items():
+            if normalized in local_symbols:
+                continue
+            symbol = actual_record['symbol']
+            entry_price = actual_record['cost_price']
+            risk_targets = {}
+            if entry_price > 0:
+                try:
+                    risk_targets = self._calc_risk_targets(symbol, entry_price, market)
+                except Exception as e:
+                    print(f"  ⚠️ {symbol}: 补建ATR风控价失败，仍保留固定止损保护: {e}")
+            now_iso = datetime.now().isoformat()
+            record = {
+                'symbol': symbol,
+                'shares': actual_record['shares'],
+                'entry_price': entry_price,
+                'entry_time': now_iso,
+                'market': market,
+                'entry_score': 0,
+                'entry_reasons': ['富途真实持仓自动补建风控记录'],
+                'peak_pnl_pct': max(0.0, actual_record['pl_ratio']),
+                'peak_time': now_iso,
+            }
+            for key in ('atr', 'atr_stop', 'tp_first', 'tp_trend', 'hard_stop', 'staged_first'):
+                if risk_targets.get(key) is not None:
+                    record[key] = risk_targets[key]
+            kept.append(record)
+            added.append(symbol)
+
+        if removed or updated or added:
+            tmp_path = self.open_positions_file + '.tmp'
+            try:
+                with open(tmp_path, 'w') as f:
+                    json.dump(kept, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, self.open_positions_file)
+            except Exception as e:
+                print(f"⚠️ 同步本地开仓状态失败: {e}")
+                return {'removed': [], 'updated': [], 'added': []}
+
+        for symbol in removed:
+            self.clear_staged_reduction(symbol)
+            print(f"  🧹 {symbol}: 富途已无持仓，清理本地开仓状态")
+        for symbol in updated:
+            print(f"  🔄 {symbol}: 本地持仓股数已与富途同步")
+        for symbol in added:
+            print(f"  🛡️ {symbol}: 富途存在真实持仓，已自动补建本地风控状态")
+        return {'removed': removed, 'updated': updated, 'added': added}
+
+    def _sync_open_positions_from_futu(self, market):
+        """查询指定市场的富途持仓并同步本地开仓状态。"""
+        ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+        if ctx is None:
+            return False
+        try:
+            ret, data = ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
+            if ret != RET_OK or data is None:
+                return False
+            positions = []
+            for row in data.itertuples():
+                positions.append({
+                    'symbol': row.code,
+                    'shares': getattr(row, 'qty', 0),
+                    'cost_price': getattr(row, 'cost_price', 0),
+                    'pl_ratio': getattr(row, 'pl_ratio', 0),
+                })
+            self.reconcile_open_positions(market, positions)
+            return True
+        except Exception as e:
+            print(f"⚠️ {market.upper()}持仓状态同步失败: {e}")
+            return False
 
     def get_open_position(self, symbol):
         """获取入场记录"""
@@ -463,6 +601,90 @@ class AutoTrader:
         except Exception as e:
             print(f"  ⚠️ 待确认卖单登记失败: {e}")
 
+    def _queue_pending_buy(self, order_id, symbol, market, quantity, score, reasons):
+        path = DATA_DIR / 'pending-buy-orders.json'
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+            data[str(order_id)] = {
+                'order_id': str(order_id), 'symbol': symbol, 'market': market,
+                'quantity': int(quantity), 'score': float(score or 0),
+                'reasons': reasons or [], 'created_at': datetime.now().isoformat(),
+            }
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+            print(f"  ⏳ 已登记待确认买单: {order_id}")
+        except Exception as e:
+            print(f"  ⚠️ 待确认买单登记失败: {e}")
+
+    def reconcile_pending_buys(self):
+        path = DATA_DIR / 'pending-buy-orders.json'
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except Exception as e:
+            print(f"⚠️ 读取待确认买单失败: {e}")
+            return
+        changed = False
+        terminal = ('CANCELLED_ALL', 'FAILED', 'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT')
+        for oid, item in list(data.items()):
+            market = item.get('market', 'us')
+            ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+            try:
+                ret, df = ctx.order_list_query(order_id=str(oid), trd_env=TrdEnv.SIMULATE)
+                if ret != RET_OK or df is None or len(df) == 0:
+                    start = str(item.get('created_at', datetime.now().isoformat()))[:10]
+                    ret, df = ctx.history_order_list_query(
+                        start=start, end=datetime.now().date().isoformat(), trd_env=TrdEnv.SIMULATE
+                    )
+                    if ret == RET_OK and df is not None:
+                        df = df[df['order_id'].astype(str) == str(oid)]
+                if ret != RET_OK or df is None or len(df) == 0:
+                    continue
+                row = df.iloc[0]
+                status = str(row.get('order_status', ''))
+                price = float(row.get('dealt_avg_price', 0) or 0)
+                qty = int(row.get('dealt_qty', 0) or 0)
+                if status == 'FILLED_ALL' and price > 0 and qty > 0:
+                    symbol = item['symbol']
+                    reasons = item.get('reasons', []) or []
+                    score = float(item.get('score', 0) or 0)
+                    risk = self._calc_risk_targets(symbol, price, market)
+                    opp = self.find_opportunity(symbol, market) or {}
+                    details = self.build_dynamic_signal_details(
+                        symbol, market, score, reasons=reasons, opp_override=opp
+                    )
+                    self.save_open_position(
+                        symbol, qty, price, market,
+                        score=details.get('score_total', score), reasons=reasons, risk_targets=risk,
+                    )
+                    from feishu_pusher import FeishuPusher
+                    FeishuPusher().send_buy_notification(
+                        symbol=symbol, quantity=qty, price=price, amount=qty * price,
+                        target_take_profit=risk.get('tp_trend') or risk.get('tp_first'),
+                        target_stop_loss=risk.get('atr_stop'), risk_note=risk.get('rule_note', ''),
+                        score_total=details['score_total'], score_news=details['score_news'],
+                        score_announce=details['score_announce'], score_community=details['score_community'],
+                        score_institution=details['score_institution'], score_capital=details['score_capital'],
+                        signal_type=details['signal_type'], llm_conclusion=details['llm_conclusion'],
+                        estimated_keys=details.get('estimated_keys', []),
+                        score_adjustments=details.get('score_adjustments', {}),
+                        evidences={
+                            'news': details.get('evidence_news', ''),
+                            'announce': details.get('evidence_announce', ''),
+                            'community': details.get('evidence_community', ''),
+                            'institution': details.get('evidence_institution', ''),
+                            'capital': details.get('evidence_capital', ''),
+                        },
+                        order_id=oid, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    )
+                    del data[oid]
+                    changed = True
+                elif status in terminal:
+                    del data[oid]
+                    changed = True
+            except Exception as e:
+                print(f"⚠️ 待确认买单回查失败 {oid}: {e}")
+        if changed:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
     def reconcile_pending_sells(self):
         path = DATA_DIR / 'pending-sell-orders.json'
         try:
@@ -492,9 +714,17 @@ class AutoTrader:
                         qty = int(row.get('dealt_qty', 0) or item.get('quantity', 0))
                         entry = float(item.get('entry_price', 0) or 0)
                         pnl_pct = ((price - entry) / entry * 100) if entry else 0
-                        self.save_closed_trade(item['symbol'], 'SELL', qty, entry, price, pnl_pct, item.get('reason', '自动平仓'), item.get('market', 'us'), order_id=oid)
+                        entry_ctx = self._lookup_entry_context(item['symbol'])
+                        self.save_closed_trade(
+                            item['symbol'], 'SELL', qty, entry, price, pnl_pct,
+                            item.get('reason', '自动平仓'), item.get('market', 'us'),
+                            entry_score=entry_ctx.get('entry_score', 0),
+                            entry_reasons=entry_ctx.get('entry_reasons', []),
+                            order_id=oid,
+                        )
                         from feishu_pusher import FeishuPusher
                         FeishuPusher().send_sell_notification(item['symbol'], qty, price, qty * price, pnl_pct, item.get('reason', '自动平仓'), oid, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                    self._sync_open_positions_from_futu(item.get('market', 'us'))
                     del data[oid]; changed = True
                 elif status in ('CANCELLED_ALL', 'FAILED', 'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT'):
                     del data[oid]; changed = True
@@ -589,43 +819,22 @@ class AutoTrader:
         return result
 
     def check_trading_hours(self, market='us'):
-        """检查是否在交易时间（包含盘前+盘中+盘后）"""
+        """检查是否可执行交易；美股市价单仅限常规交易时段。"""
         now_dt = datetime.now()
         now = now_dt.time()
 
-        # 节假日 / 非交易日过滤
-        # 美股跨午夜，按当前时段所属的交易日判断
         if market == 'us':
-            # 21:00 之后属于今天开盘的美股交易日；00:00-08:00 属于昨天开盘
-            check_date = now_dt.date()
-            if now < dt_time(21, 0):
-                check_date = (now_dt - timedelta(days=1)).date()
-            if not self.is_trading_day('us', check_date):
+            # 按纽约当地时间判断，自动适配冬夏令时。盘前、盘后和夜盘只做
+            # 机会通知，不提交无法成交的市价单。
+            now_et = datetime.now(ZoneInfo('America/New_York'))
+            if not self.is_trading_day('us', now_et.date()):
                 return False
-        elif market == 'hk':
+            return dt_time(9, 30) <= now_et.time() < dt_time(16, 0)
+
+        if market == 'hk':
             if not self.is_trading_day('hk', now_dt.date()):
                 return False
-
-        if market == 'us':
-            # 美股交易时段：盘中(21:00-04:00) + 盘后(04:00-08:00)
-            # 盘中: 21:00 - 次日04:00
-            market_start = dt_time(21, 0)
-            market_end = dt_time(4, 0)
-            # 盘后: 04:00 - 04:30
-            after_hours_start = dt_time(4, 0)
-            after_hours_end = dt_time(4, 30)
-
-            # 判断是否在交易时段
-            if now >= market_start or now <= market_end:
-                return True  # 盘中（跨午夜）
-            if now >= after_hours_start and now <= after_hours_end:
-                return True  # 盘后
-
-            return False
-        elif market == 'hk':
-            start = dt_time(9, 30)
-            end = dt_time(16, 0)
-            return start <= now <= end
+            return dt_time(9, 30) <= now <= dt_time(16, 0)
 
         return False
 
@@ -662,9 +871,12 @@ class AutoTrader:
             positions = []
             if ret == RET_OK and positions_data is not None and len(positions_data) > 0:
                 for p in positions_data.itertuples():
+                    shares = float(getattr(p, 'qty', 0) or 0)
+                    if shares <= 0:
+                        continue
                     positions.append({
                         'symbol': p.code,
-                        'shares': p.qty,
+                        'shares': shares,
                         'cost_price': getattr(p, 'cost_price', 0),
                         'market_val': getattr(p, 'market_val', 0),
                         'pl_ratio': float(getattr(p, 'pl_ratio', 0))
@@ -999,6 +1211,40 @@ class AutoTrader:
         if available_institution is None: available_institution = False
         if available_capital is None: available_capital = False
 
+        neutral_scores = {
+            'news': num(opp.get('neutral_news'), 12.5),
+            'announce': num(opp.get('neutral_announce'), 10.0),
+            'community': num(opp.get('neutral_community'), 12.5),
+            'institution': num(opp.get('neutral_institution'), 10.0),
+            'capital': num(opp.get('neutral_capital'), 5.0),
+        }
+        score_values = {
+            'news': num(score_news),
+            'announce': num(score_announce),
+            'community': num(score_community),
+            'institution': num(score_institution),
+            'capital': num(score_capital),
+        }
+        availability = {
+            'news': bool(available_news),
+            'announce': bool(available_announce),
+            'community': bool(available_community),
+            'institution': bool(available_institution),
+            'capital': bool(available_capital),
+        }
+        score_adjustments = {}
+        for key in score_values:
+            stored = opp.get(f'adjust_{key}')
+            score_adjustments[key] = (
+                num(stored) if stored is not None
+                else round(score_values[key] - neutral_scores[key], 1)
+                if availability[key] else None
+            )
+        scoring_semantics = opp.get(
+            'scoring_semantics',
+            'merged_evidence_neutral_midpoint_v2',
+        )
+
         # 3) 计算总分：优先用扫描器商定的 final_score
         score_total = opp.get('final_score') or opp.get('score') or opp.get('base_score')
         if score_total is None:
@@ -1033,6 +1279,23 @@ class AutoTrader:
                     'score_community': score_community or 0,
                     'score_institution': score_institution or 0,
                     'score_capital': score_capital or 0,
+                    'neutral_news': neutral_scores['news'],
+                    'neutral_announce': neutral_scores['announce'],
+                    'neutral_community': neutral_scores['community'],
+                    'neutral_institution': neutral_scores['institution'],
+                    'neutral_capital': neutral_scores['capital'],
+                    'adjust_news': score_adjustments['news'],
+                    'adjust_announce': score_adjustments['announce'],
+                    'adjust_community': score_adjustments['community'],
+                    'adjust_institution': score_adjustments['institution'],
+                    'adjust_capital': score_adjustments['capital'],
+                    'scoring_semantics': scoring_semantics,
+                    'available_news': availability['news'],
+                    'available_announce': availability['announce'],
+                    'available_community': availability['community'],
+                    'available_institution': availability['institution'],
+                    'available_capital': availability['capital'],
+                    'evidence_news': evidence_news,
                     'evidence_announce': evidence_announce,
                     'evidence_community': evidence_community,
                     'evidence_institution': evidence_institution,
@@ -1093,6 +1356,18 @@ class AutoTrader:
             'score_community': int(num(score_community, 0)),
             'score_institution': int(num(score_institution, 0)),
             'score_capital': int(num(score_capital, 0)),
+            'neutral_news': neutral_scores['news'],
+            'neutral_announce': neutral_scores['announce'],
+            'neutral_community': neutral_scores['community'],
+            'neutral_institution': neutral_scores['institution'],
+            'neutral_capital': neutral_scores['capital'],
+            'adjust_news': score_adjustments['news'],
+            'adjust_announce': score_adjustments['announce'],
+            'adjust_community': score_adjustments['community'],
+            'adjust_institution': score_adjustments['institution'],
+            'adjust_capital': score_adjustments['capital'],
+            'score_adjustments': score_adjustments,
+            'scoring_semantics': scoring_semantics,
             'available_news': bool(available_news),
             'available_announce': bool(available_announce),
             'available_community': bool(available_community),
@@ -1142,8 +1417,15 @@ class AutoTrader:
             print(f"⚠️ 读取当日平仓记录失败 {symbol}: {e}")
             return False, '无法确认当日卖出记录，保守禁止买入'
 
-        # 检查是否已持仓
+        # 检查是否已持仓；富途可能保留 qty=0 的历史行，不能视作当前持仓。
         for pos in positions:
+            shares = pos.get('shares')
+            if shares is not None:
+                try:
+                    if float(shares or 0) <= 0:
+                        continue
+                except (TypeError, ValueError):
+                    continue
             pos_sym = normalize(pos.get('symbol', ''))
             if sym == pos_sym:
                 return False, f"已持仓({pos.get('symbol')})"
@@ -1230,7 +1512,11 @@ class AutoTrader:
                 parts = sym.split('.')
                 return parts[0]
 
-            current_symbols = [normalize(p.code) for p in check_data.itertuples()]
+            current_symbols = [
+                normalize(p.code)
+                for p in check_data.itertuples()
+                if float(getattr(p, 'qty', 0) or 0) > 0
+            ]
             trade_sym = normalize(symbol)
             if trade_sym in current_symbols and not force:
                 print(f"⚠️ 检查发现已持仓 {symbol}（标准化后: {trade_sym}），取消下单")
@@ -1275,6 +1561,8 @@ class AutoTrader:
                 print(f"  ⚠️ 订单尚未全部成交（status={fill_status}），不发送完成通知、不写成交记录")
                 if side == 'SELL':
                     self._queue_pending_sell(result, symbol, market, quantity, entry_price_override, reasons)
+                elif side == 'BUY':
+                    self._queue_pending_buy(result, symbol, market, quantity, score, reasons)
                 return False
 
 
@@ -1328,6 +1616,7 @@ class AutoTrader:
                     signal_type=signal_details['signal_type'],
                     llm_conclusion=signal_details['llm_conclusion'],
                     estimated_keys=signal_details.get('estimated_keys', []),
+                    score_adjustments=signal_details.get('score_adjustments', {}),
                     evidences={
                         'news': signal_details.get('evidence_news', ''),
                         'announce': signal_details.get('evidence_announce', ''),
@@ -1465,20 +1754,14 @@ class AutoTrader:
 
         return success
 
-    def check_technical_signals(self, symbol, market='us'):
+    def check_technical_signals(self, symbol, market='us', entry_score=None):
         """检查技术指标信号（根据市场类型选择指标模块）
 
-        美股v1.6要求:
-        - MA20 > MA50, 价格 > MA20
-        - 技术信号 >= 2
-        - 成交量 >= 1.2x（>=1.8x为强放量）
-        - RSI < 65
+        美股入场采用评分梯度（四项: MA趋势、RSI<65、成交量>=1.8x、MACD无死叉）:
+        - >=90分满足1项；85-89分满足2项；80-84分满足3项；75-79分满足4项
 
-        港股v2.0要求:
-        - MA20上升趋势, 价格 > MA20
-        - RSI 35-70
-        - 成交量 >= 1.5x
-        - 增强信号 >= 1个
+        港股同样采用评分梯度（四项: MA趋势、RSI 35-70、成交量>=1.5x、增强信号）:
+        - >=90分满足1项；85-89分满足2项；80-84分满足3项；75-79分满足4项
         """
         if not TECH_INDICATORS_AVAILABLE:
             print(f"⚠️ 技术指标模块不可用")
@@ -1498,10 +1781,10 @@ class AutoTrader:
                 # 港股指标
                 ti = HKTechIndicators()
 
-            signals = ti.get_entry_signals(symbol)
+            signals = ti.get_entry_signals(symbol, entry_score=entry_score)
             ti.close()
 
-            # 获取最大分数（美股8分，港股6分）
+            # 获取最大分数（美股和港股均为8分）
             max_score = signals.get('max_score', 8)
             print(f"   技术评分: {signals['score']}/{max_score}")
             for reason in signals['reasons']:
@@ -1555,14 +1838,16 @@ class AutoTrader:
         return value
 
     def get_score_based_position(self, score, market='us'):
-        """按评分计算目标仓位。美股8%-12%，港股3%-6%。"""
+        """按评分计算目标仓位。美股6%-12%，港股2%-6%。"""
         try:
             score = float(score or 0)
         except:
             score = 0
         if market != 'us':
-            if score < 80:
+            if score < 75:
                 return 0.0
+            if score < 80:
+                return 0.02
             if score < 85:
                 return 0.03
             if score < 90:
@@ -1570,8 +1855,10 @@ class AutoTrader:
             if score < 95:
                 return 0.05
             return 0.06
-        if score < 80:
+        if score < 75:
             return 0.0
+        if score < 80:
+            return 0.06 + (score - 75) * 0.005  # 75-79: 6%-8%
         if score < 85:
             return 0.08 + (score - 80) * 0.005  # 80-84: 8%-10%
         if score < 90:
@@ -1664,6 +1951,14 @@ class AutoTrader:
         single_limit = self.risk_config.get(f'{market}_single_position_limit', 0.12)
         total_limit = self.risk_config.get(f'{market}_total_position_limit', 1.0)
         base_pct = min(self.get_score_based_position(score, market), single_limit)
+        if base_pct <= 0:
+            min_score = self.us_config.get('min_score', 75) if market == 'us' else self.hk_config.get('min_score', 75)
+            return {
+                'can_buy': False,
+                'reason': f'评分{float(score or 0):g}低于交易门槛{min_score}',
+                'quantity': 0,
+                'base_pct': 0.0,
+            }
         multiplier = 1.0
         market_sentiment_score = None
         market_sentiment_reason = ''
@@ -2020,7 +2315,7 @@ class AutoTrader:
             major_negative, neg_reason = False, ''
         if major_negative and shares > 0:
             print(f"  🚨 {key}: staged 状态下命中重大利空 → 立即全平剩余 {shares} 股 ({neg_reason})")
-            self.execute_position_sell(pos_data, shares, f'重大利空触发staged剩余全平: {neg_reason}'[:80], 'staged_major_negative_full_exit', market)
+            self.execute_position_sell(pos_data, shares, f'重大利空触发staged剩余全平: {neg_reason}', 'staged_major_negative_full_exit', market)
             return True
 
         if item.get('status') == 'stage1_done':
@@ -2178,6 +2473,7 @@ class AutoTrader:
                 return
         print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.reconcile_pending_sells()
+        self.reconcile_pending_buys()
 
         # 检查交易时间
         us_trading = self.check_trading_hours('us')
@@ -2196,12 +2492,16 @@ class AutoTrader:
             if not us_account:
                 print("❌ 无法获取美股账户信息")
                 us_trading = False
+            else:
+                self.reconcile_open_positions('us', us_account.get('positions', []))
 
         if hk_trading:
             hk_account = self.get_account_and_positions('hk')
             if not hk_account:
                 print("❌ 无法获取港股账户信息")
                 hk_trading = False
+            else:
+                self.reconcile_open_positions('hk', hk_account.get('positions', []))
 
         if not us_trading and not hk_trading:
             # 仅美股非交易时间发送机会通知，港股交易时间正常交易不发
@@ -2257,6 +2557,7 @@ class AutoTrader:
                             signal_type=signal_details['signal_type'],
                             llm_conclusion=signal_details['llm_conclusion'],
                             estimated_keys=signal_details.get('estimated_keys', []),
+                            score_adjustments=signal_details.get('score_adjustments', {}),
                             evidences={
                                 'news': signal_details.get('evidence_news', ''),
                                 'announce': signal_details.get('evidence_announce', ''),
@@ -2360,10 +2661,10 @@ class AutoTrader:
                 if major_negative:
                     positions_to_close.append(sym)
                     if pl_pct > 0:
-                        stage_reduce_reasons[sym] = '重大利空触发全平(盈利中风控)'
+                        stage_reduce_reasons[sym] = '重大利空触发全平(盈利中风控)' + f': {negative_reason}'
                         print(f"    ⚠️ 重大利空→直接全平! {negative_reason}")
                     else:
-                        stage_reduce_reasons[sym] = '重大利空触发全平'
+                        stage_reduce_reasons[sym] = '重大利空触发全平' + f': {negative_reason}'
                         print(f"    ⚠️ 重大利空→直接全平! {negative_reason}")
                     continue
 
@@ -2514,7 +2815,11 @@ class AutoTrader:
                 if should:
                     # ===== v1.6 技术指标检查 =====
                     # 检查技术信号（美股: MA趋势、RSI、成交量、MACD）
-                    tech_signals = self.check_technical_signals(symbol, market='us')
+                    tech_signals = self.check_technical_signals(
+                        symbol,
+                        market='us',
+                        entry_score=score,
+                    )
 
                     if not tech_signals.get('can_enter', False):
                         print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
@@ -2572,7 +2877,9 @@ class AutoTrader:
                 if should:
                     # ===== 港股v2.0 技术指标检查 =====
                     # 检查技术信号（港股: MA20趋势、RSI 35-70、成交量1.5x、增强信号）
-                    tech_signals = self.check_technical_signals(symbol, market='hk')
+                    tech_signals = self.check_technical_signals(
+                        symbol, market='hk', entry_score=score
+                    )
 
                     if not tech_signals.get('can_enter', False):
                         print(f"  ⏭️ {symbol}: 技术指标不满足入场条件")
@@ -2825,7 +3132,7 @@ if __name__ == '__main__':
                         if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             # 重大利空 → 一律全平
                             if major_negative:
-                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '')
+                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
                                 print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
                                 success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'us')
                                 if success:
@@ -2918,7 +3225,7 @@ if __name__ == '__main__':
                         # 同美股：ATR动态优先，-6%兜底
                         if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             if major_negative:
-                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '')
+                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
                                 print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
                                 success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'hk')
                                 if success:

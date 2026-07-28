@@ -7,10 +7,8 @@
 - K线数据获取
 
 入场条件:
-- MA20上升趋势, 价格 > MA20
-- RSI区间: 35-70
-- 成交量 >= 1.5x
-- 增强信号: >=1个 (突破高点 或 布林收缩)
+- 四项技术条件: MA20趋势、RSI 35-70、成交量>=1.5x、增强信号
+- 最终评分>=90满足1项；85-89满足2项；80-84满足3项；75-79满足4项
 
 出场条件:
 - 止损: ATR 1.5x
@@ -44,12 +42,9 @@ from futu import OpenQuoteContext
 class HKTechIndicators:
     """港股技术指标计算类
     
-    策略v2.0要求:
-    入场:
-    - 趋势: MA20上升, 价格 > MA20
-    - RSI: 35-70
-    - 成交量: >= 1.5x
-    - 增强信号: >=1个
+    策略v2.0入场采用评分梯度:
+    - 四项条件: MA20上升且价格 > MA20、RSI 35-70、成交量 >= 1.5x、增强信号 >=1个
+    - >=90分满足1项；85-89分满足2项；80-84分满足3项；75-79分满足4项
     
     出场:
     - 止损: ATR 1.5x
@@ -399,12 +394,12 @@ class HKTechIndicators:
             'meets_condition': len(signals) >= 1
         }
     
-    def get_entry_signals(self, symbol):
+    def get_entry_signals(self, symbol, entry_score=None):
         """获取完整的入场技术信号"""
         signals = {
             'market': 'HK',
             'score': 0,
-            'max_score': 6,  # MA + RSI + 成交量 + 增强信号 + 2备用
+            'max_score': 8,
             'details': {},
             'can_enter': False,
             'reasons': []
@@ -458,20 +453,44 @@ class HKTechIndicators:
             else:
                 signals['reasons'].append("⚠️ 无增强信号")
         
-        # 入场硬门槛：趋势、RSI、成交量、增强信号均须合格。
-        signals['can_enter'] = trend_ok and rsi_ok and volume_ok and enhance_ok
-        if _data_ok > 0 and not signals['can_enter']:
-            signals['reasons'].append('⛔ 港股入场硬门槛未全部满足')
+        try:
+            final_score = float(entry_score or 0)
+        except (TypeError, ValueError):
+            final_score = 0.0
+        if final_score >= 90:
+            required_conditions = 1
+        elif final_score >= 85:
+            required_conditions = 2
+        elif final_score >= 80:
+            required_conditions = 3
+        elif final_score >= 75:
+            required_conditions = 4
+        else:
+            required_conditions = 5
+
+        matched_conditions = sum((trend_ok, rsi_ok, volume_ok, enhance_ok))
+        signals['details']['entry_score'] = final_score
+        signals['details']['matched_conditions'] = matched_conditions
+        signals['details']['required_conditions'] = required_conditions
+        signals['can_enter'] = final_score >= 75 and matched_conditions >= required_conditions
 
         # 只有数据全部获取失败（K线不足/断连）时才用备用源，不是技术面差的时候
         if _data_ok == 0:
             fallback = self._technical_anomaly_fallback(symbol)
             if fallback:
                 signals['score'] = fallback['score']
-                signals['can_enter'] = fallback['score'] >= 4
+                fallback_matched = 1 if fallback['score'] >= 4 else 0
+                signals['details']['matched_conditions'] = fallback_matched
+                signals['details']['technical_fallback_used'] = True
+                signals['can_enter'] = final_score >= 75 and fallback_matched >= required_conditions
                 signals['reasons'].extend(fallback['reasons'])
                 signals['details']['tech_anomaly_fallback'] = fallback['detail']
 
+        final_matched = signals['details'].get('matched_conditions', matched_conditions)
+        signals['reasons'].append(
+            f"{'✅' if signals['can_enter'] else '⛔'} 评分{final_score:.0f}需满足"
+            f"{required_conditions}项技术条件，当前满足{final_matched}项"
+        )
         return signals
 
     def _technical_anomaly_fallback(self, symbol):

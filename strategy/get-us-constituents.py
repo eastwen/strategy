@@ -1,79 +1,229 @@
-#!/home/admin/.openclaw/workspace-stock/futu-venv/bin/python3.14
-"""
-美股成分股列表
-标普500 (505只) + 纳斯达克100 (103只)
-"""
+#!/usr/bin/env python3
+"""每周刷新美股官方股票池，只保留当前官方名单。"""
 
-import requests
+import argparse
+import csv
+import io
 import json
+import os
+from datetime import datetime
 
-def get_sp500_constituents():
-    """从Wikipedia获取标普500成分股"""
+import pandas as pd
+import requests
+
+from runtime_config import STRATEGY_DIR, load_api_keys
+
+POOL_PATH = STRATEGY_DIR / 'us-index-constituents.json'
+SP500_URL = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+SP500_FALLBACK_URL = 'https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv'
+NASDAQ_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'
+ALPHAVANTAGE_URL = 'https://www.alphavantage.co/query'
+FINNHUB_URL = 'https://finnhub.io/api/v1/stock/symbol'
+HEADERS = {'User-Agent': 'Mozilla/5.0 stock-pool-updater/1.0'}
+FINNHUB_EQUITY_TYPES = {'Common Stock', 'ADR', 'REIT'}
+
+
+def _symbols(values):
+    result = []
+    for value in values or []:
+        symbol = value.get('symbol') if isinstance(value, dict) else value
+        symbol = str(symbol or '').strip().upper()
+        if symbol:
+            result.append(symbol)
+    return list(dict.fromkeys(result))
+
+
+def fetch_sp500_wikipedia():
+    response = requests.get(SP500_URL, headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    tables = pd.read_html(io.StringIO(response.text))
+    symbols = _symbols(tables[0]['Symbol'].tolist())
+    if len(symbols) < 450:
+        raise ValueError(f'Wikipedia标普500数量异常: {len(symbols)}')
+    return symbols
+
+
+def fetch_sp500_github():
+    response = requests.get(SP500_FALLBACK_URL, headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    rows = csv.DictReader(io.StringIO(response.text))
+    symbols = _symbols(row.get('Symbol') for row in rows)
+    if len(symbols) < 450:
+        raise ValueError(f'GitHub CSV标普500数量异常: {len(symbols)}')
+    return symbols
+
+
+def fetch_sp500():
+    sources = {}
+    errors = {}
     try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        # 使用pandas读取HTML表格
-        import pandas as pd
-        tables = pd.read_html(url)
-        df = tables[0]
-        symbols = df['Symbol'].tolist()
-        # 处理特殊情况（如BRK.B -> BRK-B）
-        symbols = [s.replace('.', '-') for s in symbols]
-        return symbols
-    except Exception as e:
-        print(f"获取标普500失败: {e}")
+        sources['wikipedia'] = fetch_sp500_wikipedia()
+    except Exception as error:
+        errors['wikipedia'] = str(error)
+        print(f'⚠️ Wikipedia标普名单失败: {error}')
+    try:
+        sources['github_csv'] = fetch_sp500_github()
+    except Exception as error:
+        errors['github_csv'] = str(error)
+        print(f'⚠️ GitHub CSV标普名单失败: {error}')
+
+    if not sources:
+        raise RuntimeError(f'标普500全部名单源失败: {errors}')
+    if 'wikipedia' in sources and 'github_csv' in sources:
+        wiki_set = set(sources['wikipedia'])
+        github_set = set(sources['github_csv'])
+        only_wiki = sorted(wiki_set - github_set)
+        only_github = sorted(github_set - wiki_set)
+        if len(only_wiki) + len(only_github) > 20:
+            raise ValueError(
+                f'标普500双源差异异常: Wikipedia独有{len(only_wiki)}只、'
+                f'GitHub独有{len(only_github)}只'
+            )
+        symbols = sources['wikipedia']
+        selected = 'Wikipedia（双源核对）'
+        print(
+            f'🔎 标普500双源差异: Wikipedia独有{len(only_wiki)}只、'
+            f'GitHub独有{len(only_github)}只'
+        )
+    elif 'wikipedia' in sources:
+        symbols = sources['wikipedia']
+        selected = 'Wikipedia（GitHub不可用）'
+    else:
+        symbols = sources['github_csv']
+        selected = 'GitHub CSV（Wikipedia不可用）'
+    print(f'✅ 标普500: {len(symbols)}只 ({selected})')
+    return symbols
+
+
+def fetch_nasdaq():
+    response = requests.get(NASDAQ_URL, headers=HEADERS, timeout=30)
+    response.raise_for_status()
+    rows = csv.DictReader(io.StringIO(response.text), delimiter='|')
+    symbols = _symbols(
+        row.get('Symbol') for row in rows
+        if row.get('Test Issue') == 'N'
+        and row.get('ETF') == 'N'
+    )
+    if len(symbols) < 3000:
+        raise ValueError(f'纳斯达克正常上市股票数量异常: {len(symbols)}')
+    print(f'✅ 纳斯达克全部上市非ETF: {len(symbols)}只')
+    return symbols
+
+
+def fetch_alphavantage(api_key):
+    if not api_key:
+        print('⚠️ AlphaVantage未配置，跳过股票名录备用源')
+        return []
+    response = requests.get(ALPHAVANTAGE_URL, params={
+        'function': 'LISTING_STATUS', 'state': 'active', 'apikey': api_key,
+    }, headers=HEADERS, timeout=45)
+    response.raise_for_status()
+    rows = list(csv.DictReader(io.StringIO(response.text)))
+    symbols = _symbols(
+        row.get('symbol') for row in rows
+        if row.get('status') == 'Active'
+        and row.get('assetType') == 'Stock'
+        and row.get('exchange') == 'NASDAQ'
+    )
+    if len(symbols) < 3000:
+        raise ValueError(f'AlphaVantage活跃美股数量异常: {len(symbols)}')
+    print(f'✅ AlphaVantage纳斯达克活跃股票: {len(symbols)}只')
+    return symbols
+
+
+def fetch_finnhub(api_key):
+    if not api_key:
+        print('⚠️ Finnhub未配置，跳过股票名录备用源')
+        return []
+    response = requests.get(FINNHUB_URL, params={
+        'exchange': 'US', 'token': api_key,
+    }, headers=HEADERS, timeout=45)
+    response.raise_for_status()
+    rows = response.json()
+    if not isinstance(rows, list):
+        raise ValueError('Finnhub股票名录响应格式异常')
+    symbols = _symbols(
+        row.get('symbol') for row in rows
+        if row.get('mic') == 'XNAS'
+        and row.get('type') in FINNHUB_EQUITY_TYPES
+    )
+    if len(symbols) < 3000:
+        raise ValueError(f'Finnhub美国交易所股票数量异常: {len(symbols)}')
+    print(f'✅ Finnhub纳斯达克股票: {len(symbols)}只')
+    return symbols
+
+
+def _optional_source(name, fetcher, api_key):
+    try:
+        return fetcher(api_key)
+    except Exception as error:
+        print(f'⚠️ {name}股票名录失败，本周使用其他真实来源: {error}')
         return []
 
-def get_nasdaq100_constituents():
-    """获取纳斯达克100成分股"""
-    try:
-        url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-        import pandas as pd
-        tables = pd.read_html(url)
-        # 找到成分股表格
-        for table in tables:
-            if 'Ticker' in table.columns or 'Symbol' in table.columns:
-                col = 'Ticker' if 'Ticker' in table.columns else 'Symbol'
-                symbols = table[col].tolist()
-                symbols = [s.replace('.', '-') for s in symbols if isinstance(s, str)]
-                return symbols
-        return []
-    except Exception as e:
-        print(f"获取纳斯达克100失败: {e}")
-        return []
+
+def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None):
+    alphavantage = alphavantage or []
+    finnhub = finnhub or []
+    all_symbols = list(dict.fromkeys(
+        sp500 + nasdaq + alphavantage + finnhub
+    ))
+    source_sets = tuple(map(set, (
+        sp500, nasdaq, alphavantage, finnhub,
+    )))
+    return {
+        'sp500': sp500,
+        'nasdaq': nasdaq,
+        'alphavantage_us': alphavantage,
+        'finnhub_us': finnhub,
+        'all': all_symbols,
+        'unique_stocks': all_symbols,
+        'overlap_count': sum(
+            1 for symbol in all_symbols
+            if sum(symbol in source for source in source_sets) > 1
+        ),
+        'unique_count': len(all_symbols),
+        'updated_at': datetime.now().isoformat(),
+        'update_source': 'S&P 500 + Nasdaq Trader + AlphaVantage Nasdaq + Finnhub Nasdaq',
+        'source_counts': {
+            'sp500': len(sp500),
+            'nasdaq': len(nasdaq),
+            'alphavantage_us': len(alphavantage),
+            'finnhub_us': len(finnhub),
+        },
+    }
+
+
+def atomic_write(path, payload):
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    os.replace(tmp, path)
+
 
 def main():
-    print("="*60)
-    print("获取美股成分股列表")
-    print("="*60)
-    
-    # 标普500
-    sp500 = get_sp500_constituents()
-    print(f"✅ 标普500: {len(sp500)}只")
-    
-    # 纳斯达克100
-    nasdaq100 = get_nasdaq100_constituents()
-    print(f"✅ 纳斯达克100: {len(nasdaq100)}只")
-    
-    # 合并去重
-    all_symbols = list(set(sp500 + nasdaq100))
-    print(f"✅ 合并去重: {len(all_symbols)}只")
-    
-    # 保存
-    data = {
-        'sp500': sp500,
-        'nasdaq100': nasdaq100,
-        'all': all_symbols
-    }
-    
-    with open('/home/admin/.openclaw/workspace-stock/data/us-index-constituents.json', 'w') as f:
-        json.dump(data, f, indent=2)
-    
-    print(f"✅ 已保存到: data/us-index-constituents.json")
-    
-    # 打印前10只
-    print("\n前10只股票:")
-    for s in all_symbols[:10]:
-        print(f"  {s}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    keys = load_api_keys()
+    sp500 = fetch_sp500()
+    nasdaq = fetch_nasdaq()
+    alphavantage = _optional_source(
+        'AlphaVantage', fetch_alphavantage,
+        keys.get('alphavantage', {}).get('api_key', ''),
+    )
+    finnhub = _optional_source(
+        'Finnhub', fetch_finnhub,
+        keys.get('finnhub', {}).get('api_key', ''),
+    )
+    payload = build_updated_pool(sp500, nasdaq, alphavantage, finnhub)
+    print(
+        f"📊 最终美股池: 多源合并去重后共{payload['unique_count']}只"
+    )
+    if args.dry_run:
+        print('🧪 dry-run：未写入文件')
+        return
+    atomic_write(POOL_PATH, payload)
+    print(f'💾 已原子更新: {POOL_PATH}')
+
 
 if __name__ == '__main__':
     main()

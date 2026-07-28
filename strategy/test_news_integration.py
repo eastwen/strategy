@@ -1,101 +1,100 @@
 #!/usr/bin/env python3
-"""测试新闻整合效果"""
-import json
+"""Offline regression tests for news persistence and deduplication."""
+
 import sqlite3
+import tempfile
+import unittest
 from datetime import datetime
+from pathlib import Path
+from unittest.mock import patch
 
-def test_news_integration():
-    """测试新闻整合"""
-    print("🧪 测试新闻整合系统")
-    print("=" * 50)
-    
-    # 1. 检查数据库
-    db_path = '/home/admin/.openclaw/workspace-stock/data/news/news.db'
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        # 检查新闻表
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='news';")
-        if cursor.fetchone():
-            print("✅ 新闻数据库正常")
-            
-            # 统计新闻数量
-            cursor.execute("SELECT COUNT(*) FROM news WHERE date(timestamp) = date('now')")
-            count = cursor.fetchone()[0]
-            print(f"   今日新闻: {count} 条")
-            
-            # 查看最新新闻
-            cursor.execute("SELECT source, title FROM news ORDER BY timestamp DESC LIMIT 3")
-            for source, title in cursor.fetchall():
-                print(f"   - [{source}] {title[:50]}...")
-        else:
-            print("❌ 新闻表不存在")
-        
-        conn.close()
-    except Exception as e:
-        print(f"❌ 数据库错误: {e}")
-    
-    # 2. 检查交易机会
-    opp_file = '/home/admin/.openclaw/workspace-stock/data/us-opportunities.json'
-    try:
-        with open(opp_file, 'r') as f:
-            data = json.load(f)
-        
-        opportunities = data.get('opportunities', [])
-        print(f"\n✅ 交易机会文件正常")
-        print(f"   机会数量: {len(opportunities)} 个")
-        
-        # 检查是否有新闻调整
-        has_news_adjustment = any('news_adjusted_score' in o for o in opportunities)
-        if has_news_adjustment:
-            print("   已整合新闻调整 ✅")
-            
-            # 显示调整最大的机会
-            sorted_opps = sorted(opportunities, 
-                               key=lambda x: abs(x.get('news_adjustment', 0)), 
-                               reverse=True)
-            
-            print("\n📊 新闻调整最大的机会:")
-            for o in sorted_opps[:3]:
-                symbol = o.get('symbol', '')
-                score = o.get('score', 0)
-                adj = o.get('news_adjusted_score', 0)
-                adjustment = o.get('news_adjustment', 0)
-                reason = o.get('news_reason', '')
-                
-                if abs(adjustment) > 0.1:
-                    arrow = "↑" if adjustment > 0 else "↓"
-                    print(f"   {symbol}: {score:.1f} → {adj:.1f} ({arrow}{abs(adjustment):.1f})")
-                    print(f"     原因: {reason[:60]}...")
-        else:
-            print("   未整合新闻调整 ⚠️")
-            
-    except Exception as e:
-        print(f"❌ 交易机会文件错误: {e}")
-    
-    # 3. 模拟新闻影响
-    print("\n🎯 模拟新闻影响分析:")
-    
-    sample_symbols = ['AAPL', 'TSLA', 'NVDA', 'AMZN', 'META']
-    for symbol in sample_symbols:
-        # 模拟新闻影响
-        impact_score = 0.5 + (ord(symbol[0]) % 10) / 50  # 简单模拟
-        adjustment = (impact_score - 0.5) * 15  # 放大到±15分
-        
-        if abs(adjustment) > 3:
-            arrow = "↑" if adjustment > 0 else "↓"
-            sentiment = "看涨" if adjustment > 0 else "看跌"
-            print(f"   {symbol}: 模拟{sentiment}新闻，评分{arrow}{abs(adjustment):.1f}分")
-    
-    print("\n" + "=" * 50)
-    print("✅ 测试完成")
-    
-    # 4. 建议下一步
-    print("\n🎯 建议立即执行:")
-    print("1. 运行 python3 simple_chinese_news.py 获取今日新闻")
-    print("2. 运行 python3 news_integration.py --update 更新机会")
-    print("3. 将新闻任务添加到定时任务")
+from news_pipeline import NewsDatabase
 
-if __name__ == "__main__":
-    test_news_integration()
+
+class NewsDatabaseTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.db_path = Path(self.temp_dir.name) / 'news.db'
+        self.database = NewsDatabase(self.db_path)
+
+    def test_duplicate_news_is_not_recounted_and_mentions_are_merged(self):
+        timestamp = datetime.now().isoformat()
+        first = {
+            'source': 'TestSource',
+            'title': 'Company wins a major contract',
+            'content': 'first',
+            'url': 'https://example.test/1',
+            'stocks': ['AAPL'],
+            'sentiment': 0.8,
+            'timestamp': timestamp,
+        }
+        duplicate = {
+            **first,
+            'content': 'duplicate copy',
+            'stocks': ['AAPL', 'MSFT'],
+        }
+
+        with patch(
+            'news_pipeline.StableNewsSources.extract_stocks',
+            return_value=[],
+        ):
+            first_saved = self.database.save_news([first])
+            duplicate_saved = self.database.save_news([duplicate])
+
+        self.assertEqual(first_saved, 1)
+        self.assertEqual(duplicate_saved, 0)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            news_count = conn.execute('SELECT COUNT(*) FROM news').fetchone()[0]
+            mentions = conn.execute(
+                'SELECT symbol FROM stock_mentions ORDER BY symbol'
+            ).fetchall()
+            stats = conn.execute(
+                'SELECT count FROM sources_stats WHERE source = ?',
+                ('TestSource',),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(news_count, 1)
+        self.assertEqual(mentions, [('AAPL',), ('MSFT',)])
+        self.assertEqual(stats, (1,))
+
+    def test_two_unique_articles_increment_source_stat_twice(self):
+        timestamp = datetime.now().isoformat()
+        articles = [
+            {
+                'source': 'TestSource',
+                'title': f'Unique title {index}',
+                'content': '',
+                'url': '',
+                'stocks': [],
+                'sentiment': 0.5,
+                'timestamp': timestamp,
+            }
+            for index in range(2)
+        ]
+
+        with patch(
+            'news_pipeline.StableNewsSources.extract_stocks',
+            return_value=[],
+        ):
+            saved = self.database.save_news(articles)
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            stats = conn.execute(
+                'SELECT count FROM sources_stats WHERE source = ?',
+                ('TestSource',),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual(saved, 2)
+        self.assertEqual(stats, (2,))
+
+
+if __name__ == '__main__':
+    unittest.main()

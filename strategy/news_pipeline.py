@@ -74,6 +74,7 @@ class NewsDatabase:
         cursor = conn.cursor()
         
         saved_count = 0
+        inserted_by_source = {}
         for news in news_list:
             try:
                 # 自动提取股票代码（如果原新闻没有提供symbol）
@@ -97,27 +98,38 @@ class NewsDatabase:
                     news.get('timestamp', datetime.now().isoformat())
                 ))
                 
-                news_id = cursor.lastrowid
+                inserted = cursor.rowcount == 1
+                if inserted:
+                    news_id = cursor.lastrowid
+                    saved_count += 1
+                    source = news['source']
+                    inserted_by_source[source] = inserted_by_source.get(source, 0) + 1
+                else:
+                    cursor.execute(
+                        'SELECT id FROM news WHERE source = ? AND title = ?',
+                        (news['source'], news['title'])
+                    )
+                    existing = cursor.fetchone()
+                    news_id = existing[0] if existing else None
                 
                 # 保存股票提及
-                for mentioned_symbol in news.get('stocks', []):
-                    cursor.execute('''
-                    INSERT OR IGNORE INTO stock_mentions (news_id, symbol, mentioned_at)
-                    VALUES (?, ?, ?)
-                    ''', (news_id, mentioned_symbol, news.get('timestamp', datetime.now().isoformat())))
-                
-                saved_count += 1
+                if news_id is not None:
+                    for mentioned_symbol in news.get('stocks', []):
+                        cursor.execute('''
+                        INSERT OR IGNORE INTO stock_mentions (news_id, symbol, mentioned_at)
+                        VALUES (?, ?, ?)
+                        ''', (news_id, mentioned_symbol, news.get('timestamp', datetime.now().isoformat())))
             except Exception as e:
                 print(f"  保存新闻失败: {e}")
                 continue
         
-        # 更新统计
+        # 来源统计只累计本轮真正新增的新闻，不把被去重的输入重复计数。
         today = datetime.now().strftime('%Y-%m-%d')
-        for source in set([n['source'] for n in news_list]):
+        for source, count in inserted_by_source.items():
             cursor.execute('''
             INSERT OR REPLACE INTO sources_stats (date, source, count)
             VALUES (?, ?, COALESCE((SELECT count FROM sources_stats WHERE date = ? AND source = ?), 0) + ?)
-            ''', (today, source, today, source, sum(1 for n in news_list if n['source'] == source)))
+            ''', (today, source, today, source, count))
         
         conn.commit()
         conn.close()

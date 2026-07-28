@@ -7,10 +7,8 @@
 - K线数据获取
 
 入场条件:
-- MA20 > MA50, 价格 > MA20
-- 技术信号 >= 2
-- 成交量 >= 1.2x（>=1.8x为强放量）
-- RSI < 65
+- 四项技术条件: MA趋势、RSI<65、成交量>=1.8x、MACD无死叉
+- 最终评分>=90满足1项；85-89满足2项；80-84满足3项；75-79满足4项
 
 出场条件:
 - ATR止损 (1.8-2.0x)
@@ -40,10 +38,8 @@ class USTechIndicators:
     """美股技术指标计算类
     
     策略v1.6要求:
-    - 趋势: MA20 > MA50, 价格 > MA20
-    - 技术信号: >= 2
-    - 成交量: >= 1.2x（>=1.8x为强放量）
-    - RSI: < 65
+    - 四项条件: MA20 > MA50且价格 > MA20、RSI < 65、成交量 >= 1.8x、MACD无死叉
+    - 评分梯度: >=90满足1项；85-89满足2项；80-84满足3项；75-79满足4项
     
     出场:
     - 止损: ATR 1.8-2.0x
@@ -174,7 +170,14 @@ class USTechIndicators:
         return rsi
     
     def check_volume(self, symbol):
-        """Project current US daily volume by session progress, then compare with 20 complete sessions."""
+        """Compare current session's actual volume against 20-day average volume.
+
+        No projection / extrapolation: the real cumulative volume at the
+        current moment is compared directly with the 20 complete prior
+        sessions' average.  During early trading this ratio will naturally
+        be small – that is the honest signal; inflating it by extrapolating
+        from session progress produced false positives (e.g. OTLK showed
+        7.7x five minutes after the open)."""
         df = self.get_kline(symbol, 60)
         if df is None or len(df) < 21:
             return None
@@ -184,19 +187,7 @@ class USTechIndicators:
         if avg_vol == 0:
             return None
 
-        projected_vol = current_vol
-        try:
-            last_date = pd.to_datetime(df['date'].iloc[-1]).date()
-            now_et = datetime.now(ZoneInfo('America/New_York'))
-            if last_date == now_et.date():
-                session_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-                session_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-                if session_open <= now_et < session_close:
-                    progress = (now_et - session_open).total_seconds() / (session_close - session_open).total_seconds()
-                    projected_vol = current_vol / max(0.10, min(1.0, progress))
-        except Exception:
-            pass
-        return projected_vol / avg_vol
+        return current_vol / avg_vol
 
     def get_llm_snapshot(self, symbol):
         '''Return a compact, real K-line summary for LLM verification.'''
@@ -269,7 +260,7 @@ class USTechIndicators:
         
         return macd_above_prev and macd_below_now
     
-    def get_entry_signals(self, symbol):
+    def get_entry_signals(self, symbol, entry_score=None):
         """获取入场技术信号"""
         signals = {
             'score': 0,
@@ -278,7 +269,7 @@ class USTechIndicators:
             'reasons': []
         }
         _data_ok = 0  # 有几个检查成功拿到了数据
-        trend_ok = rsi_ok = volume_ok = False
+        trend_ok = rsi_ok = volume_ok = macd_ok = False
         
         # 1. MA趋势检查 (2分)
         ma_trend = self.check_trend(symbol)
@@ -312,16 +303,12 @@ class USTechIndicators:
         if vol_ratio:
             _data_ok += 1
             signals['details']['volume'] = vol_ratio
-            if vol_ratio >= 1.2:
+            if vol_ratio >= 1.8:
                 volume_ok = True
-                if vol_ratio >= 1.8:
-                    signals['score'] += 2
-                    signals['reasons'].append(f"✅ 强放量{vol_ratio:.1f}倍")
-                else:
-                    signals['score'] += 1
-                    signals['reasons'].append(f"✅ 成交量{vol_ratio:.1f}倍，达到1.2倍入场门槛")
+                signals['score'] += 2
+                signals['reasons'].append(f"✅ 成交量{vol_ratio:.1f}倍，达到1.8倍入场门槛")
             else:
-                signals['reasons'].append(f"⚠️ 成交量仅{vol_ratio:.1f}倍，不足1.2倍")
+                signals['reasons'].append(f"⚠️ 成交量仅{vol_ratio:.1f}倍，不足1.8倍")
         
         # 4. MACD检查 (2分) - 无死叉
         try:
@@ -330,6 +317,7 @@ class USTechIndicators:
                 _data_ok += 1
                 signals['details']['macd_death_cross'] = death_cross
                 if not death_cross:
+                    macd_ok = True
                     signals['score'] += 2
                     signals['reasons'].append("✅ MACD无死叉")
                 else:
@@ -337,20 +325,44 @@ class USTechIndicators:
         except:
             pass
         
-        # 入场硬门槛：趋势、RSI、成交量均须合格；MACD仅作加分确认。
-        signals['can_enter'] = trend_ok and rsi_ok and volume_ok and signals['score'] >= 2
-        if _data_ok > 0 and not signals['can_enter']:
-            signals['reasons'].append('⛔ 美股入场硬门槛未全部满足')
+        try:
+            final_score = float(entry_score or 0)
+        except (TypeError, ValueError):
+            final_score = 0.0
+        if final_score >= 90:
+            required_conditions = 1
+        elif final_score >= 85:
+            required_conditions = 2
+        elif final_score >= 80:
+            required_conditions = 3
+        elif final_score >= 75:
+            required_conditions = 4
+        else:
+            required_conditions = 5
+
+        matched_conditions = sum((trend_ok, rsi_ok, volume_ok, macd_ok))
+        signals['details']['entry_score'] = final_score
+        signals['details']['matched_conditions'] = matched_conditions
+        signals['details']['required_conditions'] = required_conditions
+        signals['can_enter'] = final_score >= 75 and matched_conditions >= required_conditions
 
         # 只有数据全部获取失败（K线不足/断连）时才用备用源，不是技术面差的时候
         if _data_ok == 0:
             fallback = self._technical_anomaly_fallback(symbol)
             if fallback:
                 signals['score'] = fallback['score']
-                signals['can_enter'] = fallback['score'] >= 2
+                fallback_matched = 1 if fallback['score'] >= 2 else 0
+                signals['details']['matched_conditions'] = fallback_matched
+                signals['details']['technical_fallback_used'] = True
+                signals['can_enter'] = final_score >= 75 and fallback_matched >= required_conditions
                 signals['reasons'].extend(fallback['reasons'])
                 signals['details']['tech_anomaly_fallback'] = fallback['detail']
 
+        final_matched = signals['details'].get('matched_conditions', matched_conditions)
+        signals['reasons'].append(
+            f"{'✅' if signals['can_enter'] else '⛔'} 评分{final_score:.0f}需满足"
+            f"{required_conditions}项技术条件，当前满足{final_matched}项"
+        )
         return signals
 
     def _technical_anomaly_fallback(self, symbol):

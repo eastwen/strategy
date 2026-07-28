@@ -113,7 +113,7 @@ class FeishuPusher:
         content = f"⚠️ {title}\n\n{message}\n\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         return self.send_message(content)
 
-    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None):
+    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None, score_adjustments=None):
         """发送自动买入通知(真实五源评分版)
 
         2026-06-24 east 修复：
@@ -141,6 +141,15 @@ class FeishuPusher:
         def ev_line(key):
             txt = ev.get(key, '') if isinstance(ev, dict) else ''
             return f"\n   · {txt}" if txt else ''
+        adjustments = score_adjustments or {}
+        def adjustment_tag(key):
+            value = adjustments.get(key) if isinstance(adjustments, dict) else None
+            if key in uncov or value is None:
+                return ''
+            try:
+                return f" (较中性{float(value):+.1f})"
+            except (TypeError, ValueError):
+                return ''
 
         content = f"""✅ 买入成功
 
@@ -151,11 +160,11 @@ class FeishuPusher:
 {target_line}
 
 📊 评分明细: 总分{score_total}
- 国际资讯: {score_news}/25{tag('news')}{ev_line('news')}
- 官方公告: {score_announce}/20{tag('announce')}{ev_line('announce')}
- 社区情绪: {score_community}/25{tag('community')}{ev_line('community')}
- 机构观点: {score_institution}/20{tag('institution')}{ev_line('institution')}
- 资金异动: {score_capital}/10{tag('capital')}{ev_line('capital')}
+ 国际资讯: {score_news}/25{adjustment_tag('news')}{tag('news')}{ev_line('news')}
+ 官方公告: {score_announce}/20{adjustment_tag('announce')}{tag('announce')}{ev_line('announce')}
+ 社区情绪: {score_community}/25{adjustment_tag('community')}{tag('community')}{ev_line('community')}
+ 机构观点: {score_institution}/20{adjustment_tag('institution')}{tag('institution')}{ev_line('institution')}
+ 资金异动: {score_capital}/10{adjustment_tag('capital')}{tag('capital')}{ev_line('capital')}
 
 🔍 信号类型: {signal_type}
 🤖 LLM验真: {llm_conclusion}
@@ -182,7 +191,7 @@ class FeishuPusher:
 时间: {timestamp}"""
         return self.send_message(content)
 
-    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None):
+    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None, score_adjustments=None):
         """发送非交易时间交易机会通知(真实五源评分版)"""
         uncov = set(estimated_keys or [])
         def tag(key):
@@ -191,17 +200,26 @@ class FeishuPusher:
         def ev_line(key):
             txt = ev.get(key, '') if isinstance(ev, dict) else ''
             return f"\n   · {txt}" if txt else ''
+        adjustments = score_adjustments or {}
+        def adjustment_tag(key):
+            value = adjustments.get(key) if isinstance(adjustments, dict) else None
+            if key in uncov or value is None:
+                return ''
+            try:
+                return f" (较中性{float(value):+.1f})"
+            except (TypeError, ValueError):
+                return ''
         content = f"""🔔 【美股非交易时段高价值信号】
 
 市场状态: {market_status}
 标的: {symbol}
 
 📊 评分明细: 总分{score_total}
- 国际资讯: {score_news}/25{tag('news')}{ev_line('news')}
- 官方公告: {score_announce}/20{tag('announce')}{ev_line('announce')}
- 社区情绪: {score_community}/25{tag('community')}{ev_line('community')}
- 机构观点: {score_institution}/20{tag('institution')}{ev_line('institution')}
- 资金异动: {score_capital}/10{tag('capital')}{ev_line('capital')}
+ 国际资讯: {score_news}/25{adjustment_tag('news')}{tag('news')}{ev_line('news')}
+ 官方公告: {score_announce}/20{adjustment_tag('announce')}{tag('announce')}{ev_line('announce')}
+ 社区情绪: {score_community}/25{adjustment_tag('community')}{tag('community')}{ev_line('community')}
+ 机构观点: {score_institution}/20{adjustment_tag('institution')}{tag('institution')}{ev_line('institution')}
+ 资金异动: {score_capital}/10{adjustment_tag('capital')}{tag('capital')}{ev_line('capital')}
 
 🔍 信号类型: {signal_type}
 🤖 LLM验真: {llm_conclusion}

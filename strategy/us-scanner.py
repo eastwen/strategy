@@ -29,6 +29,17 @@ from runtime_config import (
     load_api_keys,
 )
 
+# 仅第一层达到该分数的标的进入耗时的五源第二层；最终交易线仍由策略配置控制。
+LAYER2_CANDIDATE_MIN_SCORE = 65
+
+
+def combine_layer_scores(first_layer_score, five_source_score):
+    """第一层主导总分，五源只提供10%的深度校验权重。"""
+    first = float(first_layer_score or 0)
+    second = float(five_source_score or 0)
+    return int(round(first * 0.9 + second * 0.1))
+
+
 class USScanner:
     """美股扫描器 - 支持备用数据源"""
 
@@ -39,6 +50,8 @@ class USScanner:
         self.load_stock_pool(limit=self.scan_limit)
         self.load_config()
         self.data_source = 'finnhub'
+        # 单股行情兜底可在完整 scan() 之前调用；完整扫描随后会加载真实新闻情绪覆盖它。
+        self.news_sentiment = {}
         # Futu 行情源有额度限制，只作为最后兜底；本轮不可用时自动禁用，避免逐股反复消耗。
         self.quote_ctx = None
         self._futu_quote_disabled = False
@@ -66,9 +79,13 @@ class USScanner:
 
             self.sp500 = data.get('sp500', [])
             self.nasdaq = data.get('nasdaq', [])
-
-            # 去重
-            unique_symbols = list(dict.fromkeys(self.sp500 + self.nasdaq))
+            self.alphavantage_us = data.get('alphavantage_us', [])
+            self.finnhub_us = data.get('finnhub_us', [])
+            # 合并真实股票名录，同一代码只扫描一次。
+            unique_symbols = list(dict.fromkeys(
+                self.sp500 + self.nasdaq
+                + self.alphavantage_us + self.finnhub_us
+            ))
 
             # 如果有限制,使用分层抽样;否则加载所有股票
             if limit and limit > 0 and len(unique_symbols) > limit:
@@ -108,6 +125,8 @@ class USScanner:
 
             print(f"✅ 标普500: {len(self.sp500)}只")
             print(f"✅ 纳斯达克综合: {len(self.nasdaq)}只")
+            print(f"✅ AlphaVantage活跃美股: {len(self.alphavantage_us)}只")
+            print(f"✅ Finnhub美国交易所股票: {len(self.finnhub_us)}只")
             print(f"✅ 重叠股票: {overlap}只(已去重)")
             print(f"✅ 实际扫描: {len(self.stocks)}只")
         except Exception as e:
@@ -115,6 +134,8 @@ class USScanner:
             self.stocks = []
             self.sp500 = []
             self.nasdaq = []
+            self.alphavantage_us = []
+            self.finnhub_us = []
 
     def load_config(self):
         """加载策略配置"""
@@ -218,7 +239,7 @@ class USScanner:
         emotion_score = self.calculate_market_sentiment(news_sentiment)
         score += emotion_score
 
-        # 2026-06-19 east 修复 Bug1: base_score 上限从 100 改为 90，给 LLM 预留 10 分调整空间
+        # 第一层仅用于初筛与候选排序；五源评分会在第二层接管交易候选的基础分。
         return min(90, max(0, score))
 
     def calculate_market_sentiment(self, news_sentiment=None):
@@ -428,7 +449,7 @@ class USScanner:
 
         stock_sentiment = self.news_sentiment.get(symbol)
         score = self.calculate_score(price_float, prev_close_float, change_pct_float, stock_sentiment)
-        if score < 50:
+        if score < LAYER2_CANDIDATE_MIN_SCORE:
             return None
 
         index = ""
@@ -550,7 +571,12 @@ class USScanner:
             price = row.get('last_price') or row.get('cur_price')
             prev_close = row.get('prev_close_price') or row.get('prev_close')
             change_pct = row.get('change_rate')
-            if change_pct is None and price and prev_close:
+            # 部分美股快照没有 change_rate，或返回 NaN；同一份行情有现价与昨收时直接推导。
+            try:
+                change_valid = change_pct is not None and float(change_pct) == float(change_pct)
+            except (TypeError, ValueError):
+                change_valid = False
+            if not change_valid and price and prev_close:
                 change_pct = (float(price) - float(prev_close)) / float(prev_close) * 100
             return self._build_quote_candidate(symbol.replace('US.', ''), price, prev_close, change_pct, 'futu')
         except Exception:
@@ -579,7 +605,7 @@ class USScanner:
                 continue
         return None
 
-    def scan_with_finnhub(self, top_n=50, time_budget_seconds=2040, max_workers=2):
+    def scan_with_finnhub(self, top_n=50, time_budget_seconds=2040, max_workers=3):
         """使用Finnhub扫描。第一层动态预算，默认最多约34分钟，给第二层保底25分钟。
         支持多线程并发扫描加速（max_workers），超时后返回已扫到的结果。"""
         print(f"  使用数据源: Finnhub (时间预算 {time_budget_seconds//60} 分钟, 并发{max_workers})")
@@ -688,7 +714,7 @@ class USScanner:
                         if symbol in self.nasdaq:
                             index += "纳斯达克" if not index else "+纳斯达克"
 
-                        if score >= 50:
+                        if score >= LAYER2_CANDIDATE_MIN_SCORE:
                             results.append({
                                 'symbol': symbol,
                                 'name': '',
@@ -776,7 +802,7 @@ class USScanner:
                                 if symbol in self.nasdaq:
                                     index += "纳斯达克" if not index else "+纳斯达克"
 
-                                if score >= 50:
+                                if score >= LAYER2_CANDIDATE_MIN_SCORE:
                                     results.append({
                                         'symbol': symbol,
                                         'name': info.get('shortName') or info.get('longName') or symbol,
@@ -855,7 +881,7 @@ class USScanner:
                                 if symbol in self.nasdaq:
                                     index += "纳斯达克" if not index else "+纳斯达克"
 
-                                if score >= 50:
+                                if score >= LAYER2_CANDIDATE_MIN_SCORE:
                                     results.append({
                                         'symbol': symbol,
                                         'name': info.get('shortName') or info.get('longName') or symbol,
@@ -957,11 +983,10 @@ class USScanner:
                         elif change_pct < 0:
                             base_score -= 5
 
-                        # 确保分数在合理范围
-                        # 2026-06-19 east 修复 Bug1: base 上限 90，预留给 LLM 10 分调整空间
+                        # 第一层仅用于初筛与候选排序；五源评分会在第二层接管交易候选的基础分。
                         final_score = max(0, min(90, base_score))
 
-                        if final_score >= 50:
+                        if final_score >= LAYER2_CANDIDATE_MIN_SCORE:
                             index = ""
                             if symbol in self.sp500:
                                 index = "标普500"
@@ -993,7 +1018,7 @@ class USScanner:
         print(f"✅ TinkClaw扫描完成: 找到 {len(results)} 个AI信号机会")
         return results
 
-    def scan(self, top_n=50, max_workers=2):
+    def scan(self, top_n=50, max_workers=3):
         """扫描美股市场"""
         self._scan_max_workers = max_workers
         total_budget_seconds = 59 * 60
@@ -1072,7 +1097,7 @@ class USScanner:
                             return []
 
         results.sort(key=lambda x: x['base_score'], reverse=True)
-        # 2026-07-01 east 修改：去掉 top_n 截断，所有符合 base_score >= 50 的候选都进入 save_results 跑五源深度评分
+        # 所有第一层评分达到候选线的标的进入五源深度评分；LLM 仍只处理五源 Top 20。
         all_candidates = results
 
         self.save_results(all_candidates)
@@ -1190,29 +1215,25 @@ class USScanner:
         # 先并行把 score_all 算完，Phase 2 再顺序做新闻情绪注入/LLM/flush，避免串行瓶颈
         def _prefetch_fs(candidate):
             symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
-            if candidate.get('score', 0) < 70:
+            if candidate.get('score', 0) < LAYER2_CANDIDATE_MIN_SCORE:
                 return symbol_raw, None
             try:
                 sys.path.insert(0, str(STRATEGY_DIR))
                 from four_source_scorer import score_all as _fs_score_all
-                fs = _fs_score_all(symbol_raw, 'us')
-                # 社区百分比 + 资金原始字段也一并并行预取（辅助字段，失败不影响主流程）
-                try:
-                    from four_source_scorer import _community_futu_comment as _futu_com
-                    futu_com = _futu_com(symbol_raw, 25)
-                    if futu_com.get('available'):
-                        fs['_community_raw'] = futu_com.get('raw', {})
-                        fs['_community_score'] = futu_com.get('score', 0)
-                except Exception:
-                    pass
+                fs = _fs_score_all(symbol_raw, 'us', candidate.get('name', ''))
                 return symbol_raw, fs
             except Exception as e:
                 print(f"   ⚠️ {symbol_raw} 五源评分失败: {e}")
                 return symbol_raw, None
 
         fs_map = {}
-        eligible = [c for c in results if c.get('score', 0) >= 70]
-        layer2_workers = getattr(self, '_scan_max_workers', 2)
+        eligible = sorted(
+            (c for c in results
+             if c.get('score', 0) >= LAYER2_CANDIDATE_MIN_SCORE),
+            key=lambda c: c.get('score', 0),
+            reverse=True,
+        )
+        layer2_workers = getattr(self, '_scan_max_workers', 3)
         if layer2_budget >= 12 * 60:
             finalize_reserve = min(6 * 60, max(60, layer2_budget // 4))
         else:
@@ -1253,11 +1274,16 @@ class USScanner:
                 fs = fs_map.get(symbol_raw)
                 if not fs:
                     continue
-                score_for_rank = fs['score_total'] if fs['available_count'] >= 3 else int(candidate.get('score', 70) * 0.8)
+                first_score = candidate.get('score', 70)
+                five_source_score = (
+                    fs['score_total'] if fs['available_count'] >= 3
+                    else int(first_score * 0.8)
+                )
+                score_for_rank = combine_layer_scores(first_score, five_source_score)
                 ranked_for_llm.append((score_for_rank, symbol_raw))
             ranked_for_llm.sort(key=lambda x: x[0], reverse=True)
             llm_ranked_symbols = [sym for _, sym in ranked_for_llm[:TOP_LLM_N]]
-            print(f"   🧠 LLM 实际处理五源后 Top {TOP_LLM_N}: {llm_ranked_symbols}")
+            print(f"   🧠 LLM 实际处理90/10综合分 Top {TOP_LLM_N}: {llm_ranked_symbols}")
         top_llm_set = set(llm_ranked_symbols)
         llm_tech = None
         if top_llm_set:
@@ -1300,6 +1326,7 @@ class USScanner:
                         base = max(0, base - 10)
                     candidate['base_score'] = base
                     candidate['score'] = base
+                candidate['first_layer_score'] = candidate.get('score', 0)
                 # 候选池内统一跑真实五源评分；LLM 仍只处理 TopN 名单
                 # 五源评分已在 Phase 1 并行算完，这里直接从 fs_map 取，不再串行调 API
                 symbol_raw = (candidate.get('symbol') or '').replace('US.', '')
@@ -1321,19 +1348,31 @@ class USScanner:
                     candidate['evidence_community'] = fs['evidence_community']
                     candidate['evidence_institution'] = fs['evidence_institution']
                     candidate['evidence_capital'] = fs['evidence_capital']
+                    if symbol_raw in top_llm_set:
+                        candidate['second_layer_news_events'] = (
+                            fs.get('raw', {}).get('news', {}).get('events', [])
+                        )
+                    for field in (
+                        'neutral_news', 'neutral_announce', 'neutral_community',
+                        'neutral_institution', 'neutral_capital',
+                        'adjust_news', 'adjust_announce', 'adjust_community',
+                        'adjust_institution', 'adjust_capital',
+                        'neutral_total', 'score_adjustment_total', 'scoring_semantics',
+                    ):
+                        candidate[field] = fs.get(field)
                     candidate['five_source_total'] = fs['score_total']
                     candidate['four_source_total'] = fs['score_total']  # 兼容旧字段
                     candidate['five_source_available_count'] = fs['available_count']
                     candidate['four_source_available_count'] = fs['available_count']  # 兼容旧字段
 
-                    # 第一层社区情绪：从 Phase 1 预取的原始百分比写回 candidate
-                    _com_raw = fs.pop('_community_raw', None)
-                    if _com_raw:
-                        candidate['community_bull_pct'] = _com_raw.get('bull_pct', 0)
-                        candidate['community_bear_pct'] = _com_raw.get('bear_pct', 0)
-                        candidate['community_neutral_pct'] = 1 - _com_raw.get('bull_pct', 0) - _com_raw.get('bear_pct', 0)
-                        candidate['community_post_count'] = _com_raw.get('count', 0)
-                        candidate['community_futu_score'] = fs.pop('_community_score', 0)
+                    # 直接复用统一社区证据池，不重复请求任何社区数据源。
+                    community_raw = fs.get('raw', {}).get('community', {}) or {}
+                    community_total = float(community_raw.get('count', 0) or 0)
+                    if community_total > 0:
+                        candidate['community_bull_pct'] = float(community_raw.get('bull', 0) or 0) / community_total
+                        candidate['community_bear_pct'] = float(community_raw.get('bear', 0) or 0) / community_total
+                        candidate['community_neutral_pct'] = float(community_raw.get('neutral', 0) or 0) / community_total
+                        candidate['community_post_count'] = int(round(community_total))
 
                     # 第一层资金异动：从 score_all 返回的 raw 读原始数据写回 candidate
                     try:
@@ -1349,19 +1388,25 @@ class USScanner:
 
                     print(f"   📊 {symbol_raw} 五源: 资讯{fs['score_news']}/公告{fs['score_announce']}/社区{fs['score_community']}/机构{fs['score_institution']}/资金{fs['score_capital']} (总{fs['score_total']}, 覆盖{fs['available_count']}/5)")
 
-                    # 2026-06-24 east 关键：让扫描器评分跟通知一致
-                    # 覆盖 >=3 个维度时：用真五源总分接管，卸掊 base_score
-                    # 覆盖 <3 时：降级，用 base_score × 0.8 避免数据不足的股被狂推
+                    # 第一层评分占90%，五源深度评分占10%。五源内部逻辑不变。
+                    first_score = candidate['first_layer_score']
                     if fs['available_count'] >= 3:
-                        candidate['base_score_legacy'] = candidate.get('score', 70)
-                        candidate['score'] = fs['score_total']
-                        candidate['scoring_mode'] = 'five_source_real'
-                        print(f"   ✅ {symbol_raw} 采用真五源总分 {fs['score_total']} (原 base_score {candidate['base_score_legacy']})")
+                        five_source_score = fs['score_total']
+                        coverage_mode = 'five_source_real'
                     else:
-                        candidate['base_score_legacy'] = candidate.get('score', 70)
-                        candidate['score'] = int(candidate.get('score', 70) * 0.8)
-                        candidate['scoring_mode'] = f'legacy_discounted (覆盖{fs["available_count"]}/5 <3)'
-                        print(f"   ⚠️ {symbol_raw} 覆盖不足，降级为 base_score×0.8 = {candidate['score']}")
+                        five_source_score = int(first_score * 0.8)
+                        coverage_mode = f'legacy_discounted (覆盖{fs["available_count"]}/5 <3)'
+                    candidate['base_score_legacy'] = first_score
+                    candidate['five_source_effective_score'] = five_source_score
+                    candidate['combined_base_score'] = combine_layer_scores(
+                        first_score, five_source_score
+                    )
+                    candidate['score'] = candidate['combined_base_score']
+                    candidate['scoring_mode'] = f'first90_five10:{coverage_mode}'
+                    print(
+                        f"   ✅ {symbol_raw} 综合基础分 {candidate['score']} "
+                        f"(第一层{first_score}×90% + 五源{five_source_score}×10%)"
+                    )
 
                     # 购买力不足时跳过LLM分析,直接用基础评分
                     if skip_llm:
@@ -1382,6 +1427,7 @@ class USScanner:
 
                             market_data = {
                                 'symbol': candidate.get('symbol', ''),
+                                'company_name': candidate.get('name', ''),
                                 'market': 'us',
                                 'base_score': candidate.get('score', 70),
                                 'price': candidate.get('price', 0),
@@ -1415,6 +1461,24 @@ class USScanner:
                                 'score_community': candidate.get('score_community', 0),
                                 'score_institution': candidate.get('score_institution', 0),
                                 'score_capital': candidate.get('score_capital', 0),
+                                'neutral_news': candidate.get('neutral_news', 12.5),
+                                'neutral_announce': candidate.get('neutral_announce', 10.0),
+                                'neutral_community': candidate.get('neutral_community', 12.5),
+                                'neutral_institution': candidate.get('neutral_institution', 10.0),
+                                'neutral_capital': candidate.get('neutral_capital', 5.0),
+                                'adjust_news': candidate.get('adjust_news'),
+                                'adjust_announce': candidate.get('adjust_announce'),
+                                'adjust_community': candidate.get('adjust_community'),
+                                'adjust_institution': candidate.get('adjust_institution'),
+                                'adjust_capital': candidate.get('adjust_capital'),
+                                'scoring_semantics': candidate.get('scoring_semantics', ''),
+                                'evidence_news': candidate.get('evidence_news', ''),
+                                'second_layer_news_events': candidate.get('second_layer_news_events', []),
+                                'available_news': candidate.get('available_news', False),
+                                'available_announce': candidate.get('available_announce', False),
+                                'available_community': candidate.get('available_community', False),
+                                'available_institution': candidate.get('available_institution', False),
+                                'available_capital': candidate.get('available_capital', False),
                                 'evidence_announce': candidate.get('evidence_announce', ''),
                                 'evidence_community': candidate.get('evidence_community', ''),
                                 'evidence_institution': candidate.get('evidence_institution', ''),
@@ -1449,13 +1513,19 @@ class USScanner:
                         candidate['llm_reason'] = f'非Top{TOP_LLM_N}，跳过LLM，直接采用五源评分'
                         candidate['llm_passed'] = True
                 else:
-                    candidate['final_score'] = 0 if candidate.get('score', 0) >= 70 else candidate.get('score', 0)
+                    candidate['final_score'] = (
+                        0
+                        if candidate.get('score', 0) >= LAYER2_CANDIDATE_MIN_SCORE
+                        else candidate.get('score', 0)
+                    )
                     candidate['llm_adjust'] = 0
-                    if candidate.get('score', 0) < 70:
+                    if candidate.get('score', 0) < LAYER2_CANDIDATE_MIN_SCORE:
                         candidate['llm_reason'] = ''
                     else:
                         candidate['llm_reason'] = '五源评分未完成，禁止进入交易候选'
-                    candidate['llm_passed'] = candidate.get('score', 0) < 70  # 需要五源的候选未完成时不允许通过
+                    candidate['llm_passed'] = (
+                        candidate.get('score', 0) < LAYER2_CANDIDATE_MIN_SCORE
+                    )  # 达到候选线却未完成五源时不允许通过
 
                 # 只保留最终评分>=65的
                 if candidate.get('final_score', 0) >= 65:
@@ -1541,7 +1611,11 @@ class USScanner:
                     continue
 
                 # 检查技术指标
-                tech_signals = trader.check_technical_signals(symbol, market='us')
+                tech_signals = trader.check_technical_signals(
+                    symbol,
+                    market='us',
+                    entry_score=score,
+                )
                 if not tech_signals.get('can_enter', False):
                     print(f"   ⏭️ {symbol}: 技术指标不满足")
                     continue
@@ -1649,7 +1723,7 @@ class USScanner:
                                 stock_sentiment = self.news_sentiment.get(symbol)
                                 score = self.calculate_score(price, prev_close, change_pct, stock_sentiment)
 
-                                if score >= 50:
+                                if score >= LAYER2_CANDIDATE_MIN_SCORE:
                                     index = ""
                                     if symbol in self.sp500:
                                         index = "标普500"
