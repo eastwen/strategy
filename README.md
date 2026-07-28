@@ -1,9 +1,9 @@
 # Stock 自动交易系统
 
-> 版本: v2.4 (五源共振 + LLM推理模型适配 + 飞书推送增强)
-> 最后更新: 2026-07-12
+> 版本: v2.5 (五源共振 + 动态仓位风控 + 股票池周更)
+> 最后更新: 2026-07-29
 
-## 🆙 v2.4 变更摘要 (2026-07-04 ~ 07-12)
+## 🆙 v2.5 变更摘要 (2026-07-04 ~ 07-29)
 
 - **五源共振评分系统** (`four_source_scorer.py`) — 新增资金异动维度（10分），总分100分重新分配权重：资讯25 / 公告20 / 社区25 / 机构20 / 资金10
 - **LLM 推理模型适配** (`llm_stock_analyzer.py`) — 自动检测 `reasoning_content`，max_tokens 动态调整；推理模型自动抬到 800 tokens，content 空时从 reasoning_content 末尾抽答案
@@ -11,7 +11,8 @@
 - **富途社区接入** — `news_type=1/2/3` 覆盖新闻/公告/研报，comment sentiment 合成社区情绪
 - **统一配置管理** (`runtime_config.py`) — 路径、API密钥、运行时参数集中管理，支持环境变量覆盖
 - **系统启动检查** (`system-preflight.py`) — 启动前环境验证（路径、密钥、状态文件、数据库、模块导入、Futu连接）
-- **门槛分级** — 交易时段 `min_score=80` 自动下单 / 非交易时段 `opp_alert_score=90` 仅推送
+- **门槛分级** — 交易时段 `min_score=75` 自动下单 / 美股非交易时段 `opp_alert_score=85` 仅推送
+- **股票池周更** — 港股每周日08:00更新恒指+恒科；美股08:15更新标普500+NASDAQ，多源核对补漏并按代码去重
 
 ---
 
@@ -49,8 +50,8 @@ Stock 是一个基于 **五源共振** 策略的自动交易系统，支持港�
 
 | 市场 | 账户 | 策略版本 | 扫描范围 |
 |------|------|----------|----------|
-| 🇭🇰 港股 | 15270899 (CASH) | v2.1 | 恒生指数 + 恒生科技指数 (~101只) |
-| 🇺🇸 美股 | 15270898 (MARGIN) | v1.6 | 标普500 + 纳斯达克综合 (~5251只) |
+| 🇭🇰 港股 | 15270899 (CASH) | v2.5 | 恒生指数 + 恒生科技指数（当前104只） |
+| 🇺🇸 美股 | 15270898 (MARGIN) | v2.5 | 标普500 + NASDAQ上市非ETF（当前4639只） |
 
 ---
 
@@ -128,7 +129,7 @@ nohup /home/admin/.openclaw/workspace-stock/futu-venv/bin/python3 \
 3. 检查止损/止盈（ATR 动态 + 固定比例）
 4. 获取机会列表（us-scanner / hk-scanner）
 5. 五源共振评分（four_source_scorer.py）
-6. 筛选高评分股票（交易时段≥80分下单 / 非交易时段≥90分推送）
+6. 筛选高评分股票（交易时段≥75分下单 / 美股非交易时段≥85分推送）
 7. 技术指标检查（technical_indicators_us/hk.py）
 8. 执行交易（整手处理、仓位控制）
 9. 发送飞书通知（feishu-pusher.py）
@@ -156,12 +157,12 @@ python3 auto-trader.py --daemon # 守护进程模式
 
 ### 3. 美股扫描器 (`us-scanner.py`)
 
-**版本**: v2.0 — 扫描标普500 + 纳斯达克综合 (~5251只)
+**版本**: v2.5 — 扫描标普500 + NASDAQ上市非ETF（当前4639只）
 
 **数据源优先级**: Finnhub (主) → AlphaVantage (备) → yfinance → TinkClaw → LongBridge → Futu
 
 **核心规则**:
-- 四源共振评分（配置文件中保留四源权重，实际由 five_source_scorer 增强）
+- 五源共振评分（资讯、公告、社区、机构、资金）
 - LLM 分析：基础评分≥70触发，多模型 fallback
 - 严格择时：MA20>MA50，技术信号≥2，成交量≥1.8x，RSI<65
 - 仓位控制：单票 12%，总仓位≤40%
@@ -170,7 +171,7 @@ python3 auto-trader.py --daemon # 守护进程模式
 
 ### 4. 港股扫描器 (`hk-scanner.py`)
 
-**版本**: v2.0 — 扫描恒生指数 + 恒生科技指数 (~101只)
+**版本**: v2.5 — 扫描恒生指数 + 恒生科技指数（当前104只）
 
 **数据源**: Futu OpenD (主) / Tushare (备)
 
@@ -365,12 +366,12 @@ OPENCLAW_HOME=/home/your-user/.openclaw
 
 ### 策略配置
 
-**港股** (`config/hk-strategy.json`): v2.1
+**港股** (`config/hk-strategy.json`): v2.5（统一版本源：`strategy/runtime_config.py`）
 - 入场: MA20上升趋势 + 价格>MA20 + RSI 40-65 + 成交量≥1.5x
 - 出场: ATR 1.5x止损 / ATR 3.0x止盈 / RSI>65 / 最大持仓10天
 - 仓位: 基础3%，按行业权重调整
 
-**美股** (`config/us-strategy.json`): v1.6
+**美股** (`config/us-strategy.json`): v2.5（统一版本源：`strategy/runtime_config.py`）
 - 入场: MA20>MA50 + 技术信号≥2 + 成交量≥1.8x + RSI<65 + LLM评分≥65
 - 出场: ATR 1.8-2.0x止损 / ATR 4.0-4.5x止盈 / RSI>70 / MACD死叉 / 最大持仓6天
 - 仓位: 单票12%，总仓位≤40%

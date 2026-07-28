@@ -38,7 +38,7 @@ SKILLS_DIR = Path(os.getenv("OPENCLAW_SKILLS_DIR", OPENCLAW_HOME / "skills")).ex
 
 # Single source of truth for strategy thresholds shown in reports and enforced by runners.
 SYSTEM_VERSION = "v2.5"
-SYSTEM_UPDATED = "2026-07-15"
+SYSTEM_UPDATED = "2026-07-29"
 
 STRATEGY_POLICY = {
     "us": {
