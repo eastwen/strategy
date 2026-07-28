@@ -11,7 +11,10 @@ import time
 from datetime import datetime
 from calendar import monthrange
 
-from runtime_config import DATA_DIR, REPORTS_DIR, STRATEGY_POLICY, format_strategy_policy_markdown, load_api_keys
+from runtime_config import (
+    DATA_DIR, REPORTS_DIR, STRATEGY_POLICY, format_strategy_policy_compact,
+    format_strategy_policy_markdown, load_api_keys,
+)
 from futu import OpenQuoteContext
 
 class MonthlyReportV2:
@@ -162,6 +165,7 @@ class MonthlyReportV2:
         llm_strategy = llm_client.call(
             "你是专业投资顾问。根据以下月度数据给出下月3条策略建议。\n"
             f"本月收益率: {total_pnl_pct:+.2f}%\n持仓占比: {position_pct:.1f}%\n现金占比: {cash_pct:.1f}%\n"
+            f"当前必须遵守的策略规则：\n{format_strategy_policy_compact()}\n"
             "每条格式: 建议类型|具体建议。直接回复3行。",
             max_tokens=200, temperature=0.3
         )
@@ -275,10 +279,7 @@ class MonthlyReportV2:
 
 {strategy_section}
 ### 风险控制
-- 止损线：-6%
-- 止盈线：ATR 4.0x / +15%
-- 单标的仓位：≤12%
-- 最大持仓天数：6天（美股）/ 10天（港股）
+{format_strategy_policy_compact()}
 
 ---
 

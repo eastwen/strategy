@@ -11,7 +11,11 @@ import requests
 from datetime import datetime, timedelta
 import re
 
-from runtime_config import API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR, SYSTEM_VERSION, format_strategy_policy_markdown
+from runtime_config import (
+    API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR,
+    STRATEGY_DIR, SYSTEM_VERSION, format_strategy_policy_compact,
+    format_strategy_policy_markdown,
+)
 from futu import OpenQuoteContext, RET_OK
 
 # 常量
@@ -29,9 +33,7 @@ def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
     
     client = get_llm_client()
     if not client.api_key:
-        return """1. **持仓管理**：按止损止盈规则执行（止损-6%，止盈+15%）
-2. **新开仓**：等待评分≥70分信号
-3. **仓位控制**：单标的≤12%，总仓位≤60%"""
+        return format_strategy_policy_compact()
     
     prompt = f"""你是专业的投资顾问，请基于以下投资组合和市场情况，给出下周操作建议。
 
@@ -47,11 +49,8 @@ def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
 - VIX恐慌指数: {vix:.1f} ({'恐慌' if vix >= 25 else '正常' if vix >= 20 else '平静'})
 - VHSI波幅指数: {vhsi:.1f} ({'恐慌' if vhsi >= 25 else '正常' if vhsi >= 20 else '平静'})
 
-**策略规则：**
-- 止损: -6%
-- 止盈: +15%
-- 单票仓位上限: 12%
-- 总仓位上限: 60%
+**当前统一策略规则：**
+{format_strategy_policy_compact()}
 
 请给出3条具体的下周操作建议，每条建议格式：**标题**：内容
 
@@ -63,9 +62,7 @@ def get_llm_weekly_suggestion(portfolio_summary, vix, vhsi, weekly_pnl_pct):
     print("⚠️ LLM周报建议调用失败")
     
     # 降级方案
-    return """1. **持仓管理**：按止损止盈规则执行（止损-6%，止盈+15%）
-2. **新开仓**：等待评分≥70分信号
-3. **仓位控制**：单标的≤12%，总仓位≤60%"""
+    return format_strategy_policy_compact()
 
 
 

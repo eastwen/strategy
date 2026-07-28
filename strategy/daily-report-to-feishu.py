@@ -16,7 +16,8 @@ from datetime import datetime
 # 添加futu路径
 from runtime_config import (
     API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, LOG_DIR, NEWS_DB_PATH,
-    PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR, STRATEGY_POLICY, format_strategy_policy_markdown,
+    PYTHON_BIN, REPORTS_DIR, STRATEGY_DIR, STRATEGY_POLICY,
+    format_strategy_policy_compact, format_strategy_policy_markdown,
 )
 from futu import OpenQuoteContext, OpenSecTradeContext, TrdEnv, TrdMarket, SecurityFirm, RET_OK
 
@@ -1300,7 +1301,8 @@ class ComprehensiveReportV11:
                 report += "• 📉 建议适当减仓，控制仓位在40-50%\n\n"
             elif pos_pct < 20:
                 report += "• 💡 当前仓位较低，可关注市场机会择机建仓\n\n"
-            report += "• 📊 单票止损-6%，止盈+15%\n\n"
+            for rule in format_strategy_policy_compact().splitlines():
+                report += f"• 📊 {rule}\n\n"
 
         report += f"""---
 

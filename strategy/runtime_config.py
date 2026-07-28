@@ -84,6 +84,23 @@ def format_strategy_policy_markdown() -> str:
 """
 
 
+def format_strategy_policy_compact() -> str:
+    """Render concise rules for report advice and LLM prompts."""
+    us = STRATEGY_POLICY["us"]
+    hk = STRATEGY_POLICY["hk"]
+    risk = STRATEGY_POLICY["risk"]
+    return (
+        f"统一策略版本：{SYSTEM_VERSION}（更新：{SYSTEM_UPDATED}）\n"
+        f"港股交易线：{hk['min_score']}分；动态仓位：{hk['score_position_rules']}；"
+        f"单票上限{hk['single_position_limit'] * 100:.0f}%\n"
+        f"美股交易线：{us['min_score']}分；非交易提醒线：{us['opp_alert_score']}分；"
+        f"动态仓位：{us['score_position_rules']}；单票上限{us['single_position_limit'] * 100:.0f}%\n"
+        f"共同风控：浮亏达到{abs(risk['hard_stop_loss_pct']):.0f}%触发硬止损；"
+        f"浮盈达到{risk['trailing_profit_trigger_pct']:.0f}%后，从最高价回撤"
+        f"{risk['trailing_drawdown_pct']:.0f}%触发追踪止盈；ATR目标优先于固定估算价"
+    )
+
+
 def data_path(*parts: str) -> Path:
     return DATA_DIR.joinpath(*parts)
 
