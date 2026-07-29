@@ -38,18 +38,20 @@ SKILLS_DIR = Path(os.getenv("OPENCLAW_SKILLS_DIR", OPENCLAW_HOME / "skills")).ex
 
 # Single source of truth for strategy thresholds shown in reports and enforced by runners.
 SYSTEM_VERSION = "v2.5"
+HK_STRATEGY_VERSION = "v2.2"
+US_STRATEGY_VERSION = "v1.7"
 SYSTEM_UPDATED = "2026-07-29"
 
 STRATEGY_POLICY = {
     "us": {
-        "version": SYSTEM_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
+        "version": US_STRATEGY_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
         "opp_alert_score": 85, "position_size": 0.12, "max_positions": 999,
         "single_position_limit": 0.12, "total_position_limit": 1.0,
         "score_position_rules": "75-79分 6%-8%；80-84分 8%-10%；85-89分 10%-11%；90-94分 11%-12%；95分以上 12%",
         "market_sentiment_rules": "≥65 正常；55-64 为90%；45-54 为80%；35-44 为60%；25-34 为50%；<25 暂停开仓",
     },
     "hk": {
-        "version": SYSTEM_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
+        "version": HK_STRATEGY_VERSION, "updated": SYSTEM_UPDATED, "min_score": 75,
         "position_size": 0.03, "max_positions": 999,
         "single_position_limit": 0.06, "total_position_limit": 1.0,
         "score_position_rules": "75-79分 2%；80-84分 3%；85-89分 4%；90-94分 5%；95分以上 6%",
@@ -90,7 +92,8 @@ def format_strategy_policy_compact() -> str:
     hk = STRATEGY_POLICY["hk"]
     risk = STRATEGY_POLICY["risk"]
     return (
-        f"统一策略版本：{SYSTEM_VERSION}（更新：{SYSTEM_UPDATED}）\n"
+        f"系统版本：{SYSTEM_VERSION}；港股策略：{hk['version']}；"
+        f"美股策略：{us['version']}（更新：{SYSTEM_UPDATED}）\n"
         f"港股交易线：{hk['min_score']}分；动态仓位：{hk['score_position_rules']}；"
         f"单票上限{hk['single_position_limit'] * 100:.0f}%\n"
         f"美股交易线：{us['min_score']}分；非交易提醒线：{us['opp_alert_score']}分；"

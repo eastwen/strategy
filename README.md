@@ -50,8 +50,8 @@ Stock 是一个基于 **五源共振** 策略的自动交易系统，支持港�
 
 | 市场 | 账户 | 策略版本 | 扫描范围 |
 |------|------|----------|----------|
-| 🇭🇰 港股 | 15270899 (CASH) | v2.5 | 恒生指数 + 恒生科技指数（当前104只） |
-| 🇺🇸 美股 | 15270898 (MARGIN) | v2.5 | 标普500 + NASDAQ上市非ETF（当前4639只） |
+| 🇭🇰 港股 | 15270899 (CASH) | v2.2 | 恒生指数 + 恒生科技指数（当前104只） |
+| 🇺🇸 美股 | 15270898 (MARGIN) | v1.7 | 标普500 + NASDAQ上市非ETF（当前4639只） |
 
 ---
 
@@ -366,12 +366,12 @@ OPENCLAW_HOME=/home/your-user/.openclaw
 
 ### 策略配置
 
-**港股** (`config/hk-strategy.json`): v2.5（统一版本源：`strategy/runtime_config.py`）
+**港股** (`config/hk-strategy.json`): v2.2（统一版本源：`strategy/runtime_config.py`）
 - 入场: MA20上升趋势 + 价格>MA20 + RSI 40-65 + 成交量≥1.5x
 - 出场: ATR 1.5x止损 / ATR 3.0x止盈 / RSI>65 / 最大持仓10天
 - 仓位: 基础3%，按行业权重调整
 
-**美股** (`config/us-strategy.json`): v2.5（统一版本源：`strategy/runtime_config.py`）
+**美股** (`config/us-strategy.json`): v1.7（统一版本源：`strategy/runtime_config.py`）
 - 入场: MA20>MA50 + 技术信号≥2 + 成交量≥1.8x + RSI<65 + LLM评分≥65
 - 出场: ATR 1.8-2.0x止损 / ATR 4.0-4.5x止盈 / RSI>70 / MACD死叉 / 最大持仓6天
 - 仓位: 单票12%，总仓位≤40%

@@ -13,7 +13,7 @@ import re
 
 from runtime_config import (
     API_KEYS_PATH, DATA_DIR, FUTU_HOST, FUTU_PORT, PYTHON_BIN, REPORTS_DIR,
-    STRATEGY_DIR, SYSTEM_VERSION, format_strategy_policy_compact,
+    STRATEGY_DIR, STRATEGY_POLICY, format_strategy_policy_compact,
     format_strategy_policy_markdown,
 )
 from futu import OpenQuoteContext, RET_OK
@@ -388,7 +388,7 @@ class WeeklyReportV3:
 """
         
         # 港股统计
-        report += "### 🇭🇰 港股策略 " + SYSTEM_VERSION + "\n\n"
+        report += "### 🇭🇰 港股策略 " + STRATEGY_POLICY["hk"]["version"] + "\n\n"
         if hk_stats and hk_stats['total'] > 0:
             report += f"""| 指标 | 数值 |
 |------|------|
@@ -404,7 +404,7 @@ class WeeklyReportV3:
             report += "暂无持仓\n\n"
         
         # 美股统计
-        report += "### 🇺🇸 美股策略 " + SYSTEM_VERSION + "\n\n"
+        report += "### 🇺🇸 美股策略 " + STRATEGY_POLICY["us"]["version"] + "\n\n"
         if us_stats and us_stats['total'] > 0:
             report += f"""| 指标 | 数值 |
 |------|------|
