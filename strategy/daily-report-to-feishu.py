@@ -31,7 +31,7 @@ LOG_FILE = str(LOG_DIR / 'hk-daily.log')
 def run_cmd(cmd):
     """执行命令并返回输出"""
     import subprocess
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     return result.stdout, result.stderr, result.returncode
 
 def safe_float(val, default=0.0):
@@ -1333,7 +1333,12 @@ class ComprehensiveReportV11:
 
 def create_feishu_doc(title, content):
     """创建飞书文档"""
-    cmd = f'/home/admin/.npm-global/bin/lark-cli docs +create --title "{title}" --markdown "{content}" --wiki-space {WIKI_SPACE}'
+    cmd = [
+        '/home/admin/.npm-global/bin/lark-cli', 'docs', '+create',
+        '--title', title,
+        '--markdown', content,
+        '--wiki-space', WIKI_SPACE,
+    ]
     stdout, stderr, code = run_cmd(cmd)
     try:
         result = json.loads(stdout)
