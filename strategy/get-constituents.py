@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""每周刷新港股指数成分股，只保留当前官方成分股。"""
+"""每周刷新港股指数成分股，并保留明确配置的自定义标的。"""
 
 import argparse
 import json
@@ -11,6 +11,7 @@ from futu import OpenQuoteContext, RET_OK
 from runtime_config import FUTU_HOST, FUTU_PORT, STRATEGY_DIR
 
 POOL_PATH = STRATEGY_DIR / 'hk-index-constituents.json'
+CUSTOM_SYMBOLS = ['HK.07709', 'HK.07747']
 
 
 def _codes(values):
@@ -35,10 +36,12 @@ def fetch_index_constituents(ctx, index_code, index_name):
 def build_updated_pool(hsi, hstech):
     if len(hsi) < 50 or len(hstech) < 20:
         raise ValueError(f'新名单数量异常: 恒指{len(hsi)}、恒科{len(hstech)}')
-    all_symbols = list(dict.fromkeys(hsi + hstech))
+    custom = _codes(CUSTOM_SYMBOLS)
+    all_symbols = list(dict.fromkeys(hsi + hstech + custom))
     return {
         'hsi': hsi,
         'hstech': hstech,
+        'custom': custom,
         'hk_all': all_symbols,
         'overlap_count': len(set(hsi) & set(hstech)),
         'unique_count': len(all_symbols),
@@ -65,7 +68,8 @@ def main():
         ctx.close()
     payload = build_updated_pool(hsi, hstech)
     print(
-        f"📊 最终港股池: 恒指与恒科去重后共{payload['unique_count']}只"
+        f"📊 最终港股池: 恒指、恒科与自定义标的去重后共"
+        f"{payload['unique_count']}只（自定义{len(payload['custom'])}只）"
     )
     if args.dry_run:
         print('🧪 dry-run：未写入文件')

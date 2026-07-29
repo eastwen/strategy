@@ -88,8 +88,11 @@ class HKScanner:
             
             self.hsi = data.get('hsi', [])
             self.hstech = data.get('hstech', [])
-            # 只扫描当前官方指数成分股，同属两个指数的股票按代码去重。
-            self.stocks = list(dict.fromkeys(self.hsi + self.hstech))
+            self.custom_stocks = data.get('custom', [])
+            # 官方指数成分股与明确配置的自定义标的按代码合并去重。
+            self.stocks = list(dict.fromkeys(
+                self.hsi + self.hstech + self.custom_stocks
+            ))
             
             # 标记重叠
             overlap = len(set(self.hsi) & set(self.hstech))
@@ -97,12 +100,14 @@ class HKScanner:
             print(f"✅ 恒生指数: {len(self.hsi)}只")
             print(f"✅ 恒生科技: {len(self.hstech)}只")
             print(f"✅ 重叠股票: {overlap}只（已去重）")
+            print(f"✅ 自定义标的: {len(self.custom_stocks)}只")
             print(f"✅ 合并去重: {len(self.stocks)}只")
         except Exception as e:
             print(f"❌ 加载成分股失败: {e}")
             self.stocks = []
             self.hsi = []
             self.hstech = []
+            self.custom_stocks = []
     
     def load_config(self):
         """加载策略配置"""

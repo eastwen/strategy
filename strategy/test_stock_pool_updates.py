@@ -38,12 +38,13 @@ class StockPoolUpdateTest(unittest.TestCase):
         github.return_value = [f'SP{i}' for i in range(500)]
         self.assertEqual(US.fetch_sp500(), github.return_value)
 
-    def test_hk_keeps_only_official_symbols_and_deduplicates(self):
+    def test_hk_keeps_official_and_explicit_custom_symbols(self):
         hsi = [f'HK.{i:05d}' for i in range(1, 51)]
         hstech = [f'HK.{i:05d}' for i in range(700, 720)]
         updated = HK.build_updated_pool(hsi, hstech)
-        self.assertEqual(updated['hk_all'], list(dict.fromkeys(hsi + hstech)))
-        self.assertNotIn('custom', updated)
+        expected = list(dict.fromkeys(hsi + hstech + HK.CUSTOM_SYMBOLS))
+        self.assertEqual(updated['hk_all'], expected)
+        self.assertEqual(updated['custom'], HK.CUSTOM_SYMBOLS)
         self.assertNotIn('legacy_extra', updated)
 
     def test_us_keeps_only_official_symbols_and_deduplicates(self):
