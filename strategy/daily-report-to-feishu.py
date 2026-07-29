@@ -198,7 +198,10 @@ class ComprehensiveReportV11:
         # 统计
         wins = [p for p in positions if p.get('pnl_pct', 0) > 0]
         losses = [p for p in positions if p.get('pnl_pct', 0) <= 0]
-        total_pnl = sum(p.get('market_val', 0) * p.get('pnl_pct', 0) / 100 for p in positions)
+        total_pnl = sum(
+            p.get('shares', 0) * (p.get('price', 0) - p.get('cost', 0))
+            for p in positions
+        )
         avg_pnl_pct = sum(p.get('pnl_pct', 0) for p in positions) / len(positions) if positions else 0
         total_market_val = sum(p.get('market_val', 0) for p in positions)
 
@@ -880,11 +883,13 @@ class ComprehensiveReportV11:
             report += f"| 指标 | 数值 | 备注 |\n|------|------|------|\n"
             report += f"| 初始资金 | $1,000,000.00 | 模拟盘初始本金 |\n"
             profit_loss = '盈利' if initial_pct_a >= 0 else '亏损'
-            report += f"| 当前总资产 | ${ad['total_asset']:,.2f} | {profit_loss}{abs(initial_pct_a):.2f}% |\n"
+            account_pnl = ad['total_asset'] - ad.get('initial', 1000000)
+            report += f"| 当前总资产 | ${ad['total_asset']:,.2f} | 较初始资金{profit_loss}{abs(initial_pct_a):.2f}% |\n"
+            report += f"| 账户总盈亏 | ${account_pnl:+,.2f} | {profit_loss} |\n"
             report += f"| 持仓总市值 | ${ad['position_value']:,.2f} | 占总资产{pos_pct_a:.2f}% |\n"
             report += f"| 可用资金 | ${ad['cash']:,.2f} | 占总资产{cash_pct_a:.2f}% |\n"
             pl_txt = '盈利' if total_pnl_a >= 0 else '亏损'
-            report += f"| 浮动盈亏 | ${total_pnl_a:+,.2f} | {pl_txt} |\n\n"
+            report += f"| 持仓未实现盈亏 | ${total_pnl_a:+,.2f} | 当前持仓{pl_txt}，不代表账户总盈亏 |\n\n"
 
         # 加载交易系统的持仓目标价数据（同源）
         position_targets = {}
@@ -919,7 +924,7 @@ class ComprehensiveReportV11:
         hk_stats = self.get_strategy_pnl_stats(market='hk')
         us_stats = self.get_strategy_pnl_stats(market='us')
 
-        report += "## 📋 三、本日策略收益\n\n"
+        report += "## 📋 三、当前持仓表现\n\n"
 
         # 港股统计
         report += "### 🇭🇰 港股策略 " + STRATEGY_POLICY["hk"]["version"] + "\n\n"
@@ -927,11 +932,11 @@ class ComprehensiveReportV11:
             report += f"| 指标 | 数值 |\n"
             report += f"|------|------|\n"
             report += f"| 持仓数 | {hk_stats['total']}只 |\n"
-            report += f"| 盈利股数 | {hk_stats['wins']}只 |\n"
-            report += f"| 胜率 | {hk_stats['win_rate']:.1f}% |\n"
+            report += f"| 浮盈持仓数 | {hk_stats['wins']}只 |\n"
+            report += f"| 浮盈持仓占比 | {hk_stats['win_rate']:.1f}% |\n"
             report += f"| 总市值 | ${hk_stats['total_market_val']:,.2f} |\n"
-            report += f"| 总浮盈 | ${hk_stats['total_pnl']:+,.2f} |\n"
-            report += f"| 平均浮盈 | {hk_stats['avg_pnl_pct']:+.2f}% |\n"
+            report += f"| 持仓未实现盈亏 | ${hk_stats['total_pnl']:+,.2f} |\n"
+            report += f"| 平均持仓盈亏率 | {hk_stats['avg_pnl_pct']:+.2f}% |\n"
         else:
             report += "暂无持仓\n\n"
 
@@ -941,11 +946,11 @@ class ComprehensiveReportV11:
             report += f"| 指标 | 数值 |\n"
             report += f"|------|------|\n"
             report += f"| 持仓数 | {us_stats['total']}只 |\n"
-            report += f"| 盈利股数 | {us_stats['wins']}只 |\n"
-            report += f"| 胜率 | {us_stats['win_rate']:.1f}% |\n"
+            report += f"| 浮盈持仓数 | {us_stats['wins']}只 |\n"
+            report += f"| 浮盈持仓占比 | {us_stats['win_rate']:.1f}% |\n"
             report += f"| 总市值 | ${us_stats['total_market_val']:,.2f} |\n"
-            report += f"| 总浮盈 | ${us_stats['total_pnl']:+,.2f} |\n"
-            report += f"| 平均浮盈 | {us_stats['avg_pnl_pct']:+.2f}% |\n"
+            report += f"| 持仓未实现盈亏 | ${us_stats['total_pnl']:+,.2f} |\n"
+            report += f"| 平均持仓盈亏率 | {us_stats['avg_pnl_pct']:+.2f}% |\n"
             # 持仓明细已在「二、当前持仓明细」展示，此处不再重复
         else:
             report += "暂无持仓\n\n"
