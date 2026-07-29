@@ -86,6 +86,7 @@ strategy/
 ### 股票池周更
 - 股票池只覆盖既定范围：港股为恒生指数、恒生科技指数及2只明确配置的韩国半导体杠杆ETF；美股为标普500与NASDAQ上市非ETF股票，不扩展到其他美国交易所
 - 港股每周日08:00通过Futu OpenD读取`HK.800000`和`HK.800700`，再合并固定自定义标的`HK.07709`、`HK.07747`并按代码去重
+- 港股和美股JSON均使用独立`custom`字段保存手工标的；周更只替换官方来源字段并原样保留`custom`，不再使用无法区分来源的`legacy_extra`
 - 美股每周日08:15更新：标普500同时请求Wikipedia和GitHub CSV进行差异核对；NASDAQ以Nasdaq Trader为主，并使用Finnhub `XNAS`和AlphaVantage `NASDAQ`名录补漏
 - 标普双源差异超过安全阈值时拒绝覆盖；单个NASDAQ补充源失败时跳过该源，不估算、不生成虚假成员
 - 更新文件采用临时文件原子替换；扫描器每次启动都会重新读取`hk-index-constituents.json`或`us-index-constituents.json`

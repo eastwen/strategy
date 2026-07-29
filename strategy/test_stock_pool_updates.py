@@ -41,25 +41,30 @@ class StockPoolUpdateTest(unittest.TestCase):
     def test_hk_keeps_official_and_explicit_custom_symbols(self):
         hsi = [f'HK.{i:05d}' for i in range(1, 51)]
         hstech = [f'HK.{i:05d}' for i in range(700, 720)]
-        updated = HK.build_updated_pool(hsi, hstech)
-        expected = list(dict.fromkeys(hsi + hstech + HK.CUSTOM_SYMBOLS))
+        manual = ['HK.01234']
+        updated = HK.build_updated_pool(hsi, hstech, manual)
+        expected_custom = manual + HK.REQUIRED_CUSTOM_SYMBOLS
+        expected = list(dict.fromkeys(hsi + hstech + expected_custom))
         self.assertEqual(updated['hk_all'], expected)
-        self.assertEqual(updated['custom'], HK.CUSTOM_SYMBOLS)
+        self.assertEqual(updated['custom'], expected_custom)
         self.assertNotIn('legacy_extra', updated)
 
-    def test_us_keeps_only_official_symbols_and_deduplicates(self):
+    def test_us_keeps_official_and_explicit_custom_symbols(self):
         sp500 = [f'SP{i}' for i in range(450)] + ['AAPL']
         nasdaq = [f'NQ{i}' for i in range(3000)] + ['MSFT']
         alphavantage = ['AAPL', 'NYSE_ONLY']
         finnhub = ['MSFT', 'AMEX_ONLY']
-        updated = US.build_updated_pool(sp500, nasdaq, alphavantage, finnhub)
+        custom = ['USER_PICK']
+        updated = US.build_updated_pool(
+            sp500, nasdaq, alphavantage, finnhub, existing_custom=custom,
+        )
         self.assertEqual(
             updated['all'],
             list(dict.fromkeys(
-                sp500 + nasdaq + alphavantage + finnhub
+                sp500 + nasdaq + alphavantage + finnhub + custom
             )),
         )
-        self.assertNotIn('custom', updated)
+        self.assertEqual(updated['custom'], custom)
         self.assertNotIn('legacy_extra', updated)
 
 

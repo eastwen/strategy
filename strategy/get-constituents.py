@@ -11,7 +11,7 @@ from futu import OpenQuoteContext, RET_OK
 from runtime_config import FUTU_HOST, FUTU_PORT, STRATEGY_DIR
 
 POOL_PATH = STRATEGY_DIR / 'hk-index-constituents.json'
-CUSTOM_SYMBOLS = ['HK.07709', 'HK.07747']
+REQUIRED_CUSTOM_SYMBOLS = ['HK.07709', 'HK.07747']
 
 
 def _codes(values):
@@ -33,10 +33,12 @@ def fetch_index_constituents(ctx, index_code, index_name):
     return codes
 
 
-def build_updated_pool(hsi, hstech):
+def build_updated_pool(hsi, hstech, existing_custom=None):
     if len(hsi) < 50 or len(hstech) < 20:
         raise ValueError(f'新名单数量异常: 恒指{len(hsi)}、恒科{len(hstech)}')
-    custom = _codes(CUSTOM_SYMBOLS)
+    custom = list(dict.fromkeys(
+        _codes(existing_custom) + _codes(REQUIRED_CUSTOM_SYMBOLS)
+    ))
     all_symbols = list(dict.fromkeys(hsi + hstech + custom))
     return {
         'hsi': hsi,
@@ -60,13 +62,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    existing = json.loads(POOL_PATH.read_text()) if POOL_PATH.exists() else {}
     ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
     try:
         hsi = fetch_index_constituents(ctx, 'HK.800000', '恒生指数')
         hstech = fetch_index_constituents(ctx, 'HK.800700', '恒生科技指数')
     finally:
         ctx.close()
-    payload = build_updated_pool(hsi, hstech)
+    payload = build_updated_pool(hsi, hstech, existing.get('custom', []))
     print(
         f"📊 最终港股池: 恒指、恒科与自定义标的去重后共"
         f"{payload['unique_count']}只（自定义{len(payload['custom'])}只）"

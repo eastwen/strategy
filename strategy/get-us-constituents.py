@@ -161,11 +161,13 @@ def _optional_source(name, fetcher, api_key):
         return []
 
 
-def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None):
+def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None,
+                       existing_custom=None):
     alphavantage = alphavantage or []
     finnhub = finnhub or []
+    custom = _symbols(existing_custom)
     all_symbols = list(dict.fromkeys(
-        sp500 + nasdaq + alphavantage + finnhub
+        sp500 + nasdaq + alphavantage + finnhub + custom
     ))
     source_sets = tuple(map(set, (
         sp500, nasdaq, alphavantage, finnhub,
@@ -175,6 +177,7 @@ def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None):
         'nasdaq': nasdaq,
         'alphavantage_us': alphavantage,
         'finnhub_us': finnhub,
+        'custom': custom,
         'all': all_symbols,
         'unique_stocks': all_symbols,
         'overlap_count': sum(
@@ -203,6 +206,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    existing = json.loads(POOL_PATH.read_text()) if POOL_PATH.exists() else {}
     keys = load_api_keys()
     sp500 = fetch_sp500()
     nasdaq = fetch_nasdaq()
@@ -214,7 +218,10 @@ def main():
         'Finnhub', fetch_finnhub,
         keys.get('finnhub', {}).get('api_key', ''),
     )
-    payload = build_updated_pool(sp500, nasdaq, alphavantage, finnhub)
+    payload = build_updated_pool(
+        sp500, nasdaq, alphavantage, finnhub,
+        existing_custom=existing.get('custom', []),
+    )
     print(
         f"📊 最终美股池: 多源合并去重后共{payload['unique_count']}只"
     )

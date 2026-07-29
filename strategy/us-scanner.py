@@ -81,10 +81,11 @@ class USScanner:
             self.nasdaq = data.get('nasdaq', [])
             self.alphavantage_us = data.get('alphavantage_us', [])
             self.finnhub_us = data.get('finnhub_us', [])
+            self.custom_stocks = data.get('custom', [])
             # 合并真实股票名录，同一代码只扫描一次。
             unique_symbols = list(dict.fromkeys(
                 self.sp500 + self.nasdaq
-                + self.alphavantage_us + self.finnhub_us
+                + self.alphavantage_us + self.finnhub_us + self.custom_stocks
             ))
 
             # 如果有限制,使用分层抽样;否则加载所有股票
@@ -127,6 +128,7 @@ class USScanner:
             print(f"✅ 纳斯达克综合: {len(self.nasdaq)}只")
             print(f"✅ AlphaVantage活跃美股: {len(self.alphavantage_us)}只")
             print(f"✅ Finnhub美国交易所股票: {len(self.finnhub_us)}只")
+            print(f"✅ 自定义标的: {len(self.custom_stocks)}只")
             print(f"✅ 重叠股票: {overlap}只(已去重)")
             print(f"✅ 实际扫描: {len(self.stocks)}只")
         except Exception as e:
@@ -136,6 +138,7 @@ class USScanner:
             self.nasdaq = []
             self.alphavantage_us = []
             self.finnhub_us = []
+            self.custom_stocks = []
 
     def load_config(self):
         """加载策略配置"""
