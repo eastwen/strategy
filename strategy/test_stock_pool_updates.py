@@ -52,16 +52,15 @@ class StockPoolUpdateTest(unittest.TestCase):
     def test_us_keeps_official_and_explicit_custom_symbols(self):
         sp500 = [f'SP{i}' for i in range(450)] + ['AAPL']
         nasdaq = [f'NQ{i}' for i in range(3000)] + ['MSFT']
-        alphavantage = ['AAPL', 'NYSE_ONLY']
         finnhub = ['MSFT', 'AMEX_ONLY']
         custom = ['USER_PICK']
         updated = US.build_updated_pool(
-            sp500, nasdaq, alphavantage, finnhub, existing_custom=custom,
+            sp500, nasdaq, finnhub, existing_custom=custom,
         )
         self.assertEqual(
             updated['all'],
             list(dict.fromkeys(
-                sp500 + nasdaq + alphavantage + finnhub + custom
+                sp500 + nasdaq + finnhub + custom
             )),
         )
         self.assertEqual(updated['custom'], custom)

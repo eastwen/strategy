@@ -17,7 +17,6 @@ POOL_PATH = STRATEGY_DIR / 'us-index-constituents.json'
 SP500_URL = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
 SP500_FALLBACK_URL = 'https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv'
 NASDAQ_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'
-ALPHAVANTAGE_URL = 'https://www.alphavantage.co/query'
 FINNHUB_URL = 'https://finnhub.io/api/v1/stock/symbol'
 HEADERS = {'User-Agent': 'Mozilla/5.0 stock-pool-updater/1.0'}
 FINNHUB_EQUITY_TYPES = {'Common Stock', 'ADR', 'REIT'}
@@ -110,27 +109,6 @@ def fetch_nasdaq():
     return symbols
 
 
-def fetch_alphavantage(api_key):
-    if not api_key:
-        print('⚠️ AlphaVantage未配置，跳过股票名录备用源')
-        return []
-    response = requests.get(ALPHAVANTAGE_URL, params={
-        'function': 'LISTING_STATUS', 'state': 'active', 'apikey': api_key,
-    }, headers=HEADERS, timeout=45)
-    response.raise_for_status()
-    rows = list(csv.DictReader(io.StringIO(response.text)))
-    symbols = _symbols(
-        row.get('symbol') for row in rows
-        if row.get('status') == 'Active'
-        and row.get('assetType') == 'Stock'
-        and row.get('exchange') == 'NASDAQ'
-    )
-    if len(symbols) < 3000:
-        raise ValueError(f'AlphaVantage活跃美股数量异常: {len(symbols)}')
-    print(f'✅ AlphaVantage纳斯达克活跃股票: {len(symbols)}只')
-    return symbols
-
-
 def fetch_finnhub(api_key):
     if not api_key:
         print('⚠️ Finnhub未配置，跳过股票名录备用源')
@@ -161,21 +139,18 @@ def _optional_source(name, fetcher, api_key):
         return []
 
 
-def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None,
-                       existing_custom=None):
-    alphavantage = alphavantage or []
+def build_updated_pool(sp500, nasdaq, finnhub=None, existing_custom=None):
     finnhub = finnhub or []
     custom = _symbols(existing_custom)
     all_symbols = list(dict.fromkeys(
-        sp500 + nasdaq + alphavantage + finnhub + custom
+        sp500 + nasdaq + finnhub + custom
     ))
     source_sets = tuple(map(set, (
-        sp500, nasdaq, alphavantage, finnhub,
+        sp500, nasdaq, finnhub,
     )))
     return {
         'sp500': sp500,
         'nasdaq': nasdaq,
-        'alphavantage_us': alphavantage,
         'finnhub_us': finnhub,
         'custom': custom,
         'all': all_symbols,
@@ -186,11 +161,10 @@ def build_updated_pool(sp500, nasdaq, alphavantage=None, finnhub=None,
         ),
         'unique_count': len(all_symbols),
         'updated_at': datetime.now().isoformat(),
-        'update_source': 'S&P 500 + Nasdaq Trader + AlphaVantage Nasdaq + Finnhub Nasdaq',
+        'update_source': 'S&P 500 + Nasdaq Trader + Finnhub Nasdaq',
         'source_counts': {
             'sp500': len(sp500),
             'nasdaq': len(nasdaq),
-            'alphavantage_us': len(alphavantage),
             'finnhub_us': len(finnhub),
         },
     }
@@ -210,16 +184,12 @@ def main():
     keys = load_api_keys()
     sp500 = fetch_sp500()
     nasdaq = fetch_nasdaq()
-    alphavantage = _optional_source(
-        'AlphaVantage', fetch_alphavantage,
-        keys.get('alphavantage', {}).get('api_key', ''),
-    )
     finnhub = _optional_source(
         'Finnhub', fetch_finnhub,
         keys.get('finnhub', {}).get('api_key', ''),
     )
     payload = build_updated_pool(
-        sp500, nasdaq, alphavantage, finnhub,
+        sp500, nasdaq, finnhub,
         existing_custom=existing.get('custom', []),
     )
     print(
