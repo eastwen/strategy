@@ -1287,17 +1287,7 @@ class USScanner:
         ranked_for_llm.sort(key=lambda x: x[0], reverse=True)
         llm_ranked_symbols = [sym for _, sym in ranked_for_llm[:TOP_LLM_N]]
         print(f"   🧠 LLM 实际处理90/10综合分 Top {TOP_LLM_N}: {llm_ranked_symbols}")
-        # 2026-08-20 east 修复（AAPL事件）: Top N 之外、90/10综合分已达下单线(min_score)的候选
-        # 也必须走 LLM 验真，不允许"跳过LLM直接放行"。这些票虽然排名靠后，但分数够下单线，
-        # auto-trader 会直接买（此前 AAPL $134k 零验真下单就是这个洞）。
-        _us_min_score = STRATEGY_POLICY['us']['min_score']
-        _forced_extra = [sym for sc, sym in ranked_for_llm[TOP_LLM_N:] if sc >= _us_min_score]
-        if _forced_extra:
-            print(
-                f"   🛡️ 达到下单线({_us_min_score}分)但不在Top{TOP_LLM_N}的候选,强制加入LLM验真: "
-                f"{_forced_extra}"
-            )
-            llm_ranked_symbols.extend(_forced_extra)
+        # 2026-08-20 east 铁律：只有 Top N 走 LLM；名单外 llm_passed=False 禁单（不再强制补验）
         top_llm_set = set(llm_ranked_symbols)
         llm_tech = None
         if top_llm_set:
@@ -1521,11 +1511,14 @@ class USScanner:
                             candidate['llm_passed'] = False
                             candidate['llm_status'] = 'failed'
                     else:
-                        # 非TopN候选，直接用五源评分作为最终分，不跑LLM省token
+                        # 2026-08-20 east 铁律修正（AAPL事件）: 非TopN候选不再"跳过LLM直接放行"。
+                        # 铁律：没过 LLM 就不能下单。Top 20 以外的候选保留评分用于展示/观察，
+                        # 但 llm_passed=False，auto-trader 永远不会买它们。
                         candidate['final_score'] = candidate.get('score', 70)
                         candidate['llm_adjust'] = 0
-                        candidate['llm_reason'] = f'非Top{TOP_LLM_N}，跳过LLM，直接采用五源评分'
-                        candidate['llm_passed'] = True
+                        candidate['llm_reason'] = f'非Top{TOP_LLM_N}，未过LLM验真，禁止下单'
+                        candidate['llm_passed'] = False
+                        candidate['llm_status'] = 'skipped_not_top_n'
                 else:
                     candidate['final_score'] = (
                         0
