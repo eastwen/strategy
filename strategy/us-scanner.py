@@ -1284,9 +1284,20 @@ class USScanner:
                 )
                 score_for_rank = combine_layer_scores(first_score, five_source_score)
                 ranked_for_llm.append((score_for_rank, symbol_raw))
-            ranked_for_llm.sort(key=lambda x: x[0], reverse=True)
-            llm_ranked_symbols = [sym for _, sym in ranked_for_llm[:TOP_LLM_N]]
-            print(f"   🧠 LLM 实际处理90/10综合分 Top {TOP_LLM_N}: {llm_ranked_symbols}")
+        ranked_for_llm.sort(key=lambda x: x[0], reverse=True)
+        llm_ranked_symbols = [sym for _, sym in ranked_for_llm[:TOP_LLM_N]]
+        print(f"   🧠 LLM 实际处理90/10综合分 Top {TOP_LLM_N}: {llm_ranked_symbols}")
+        # 2026-08-20 east 修复（AAPL事件）: Top N 之外、90/10综合分已达下单线(min_score)的候选
+        # 也必须走 LLM 验真，不允许"跳过LLM直接放行"。这些票虽然排名靠后，但分数够下单线，
+        # auto-trader 会直接买（此前 AAPL $134k 零验真下单就是这个洞）。
+        _us_min_score = STRATEGY_POLICY['us']['min_score']
+        _forced_extra = [sym for sc, sym in ranked_for_llm[TOP_LLM_N:] if sc >= _us_min_score]
+        if _forced_extra:
+            print(
+                f"   🛡️ 达到下单线({_us_min_score}分)但不在Top{TOP_LLM_N}的候选,强制加入LLM验真: "
+                f"{_forced_extra}"
+            )
+            llm_ranked_symbols.extend(_forced_extra)
         top_llm_set = set(llm_ranked_symbols)
         llm_tech = None
         if top_llm_set:
