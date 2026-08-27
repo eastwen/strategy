@@ -33,6 +33,18 @@ from runtime_config import (
 LAYER2_CANDIDATE_MIN_SCORE = 65
 
 
+def in_us_extended_session():
+    """是否处于美股非常规时段（盘前/盘后/夜盘）。此时常规报价冻结在收盘价，
+    财报等盘后异动必须靠盘后/盘前价才能发现。"""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo('America/New_York'))
+        t = now.hour * 60 + now.minute
+        return not (9 * 60 + 30 <= t < 16 * 60)
+    except Exception:
+        return False
+
+
 def combine_layer_scores(first_layer_score, five_source_score):
     """第一层主导总分，五源只提供10%的深度校验权重。"""
     first = float(first_layer_score or 0)
@@ -56,6 +68,9 @@ class USScanner:
         self.quote_ctx = None
         self._futu_quote_disabled = False
         self._futu_lock = threading.Lock()  # 并发扫描时保护 Futu 行情上下文
+        # 第一层低于门槛被丢弃的统计（含贴近门槛的标的，便于事后排查"为什么没推送"）
+        self._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
+        self._drop_stats_lock = threading.Lock()  # 并发扫描时保护丢弃统计
         # 市场情绪指标缓存（一次扫描只算一次，避免对 5251 只股票重复调用 VIX/CNN/期权 API）
         self._sentiment_cache = None
         self._sentiment_cache_time = 0
@@ -453,6 +468,12 @@ class USScanner:
         stock_sentiment = self.news_sentiment.get(symbol)
         score = self.calculate_score(price_float, prev_close_float, change_pct_float, stock_sentiment)
         if score < LAYER2_CANDIDATE_MIN_SCORE:
+            with self._drop_stats_lock:
+                stats = self._layer1_drop_stats
+                stats['dropped'] += 1
+                stats['near_miss'].append((score, symbol))
+                stats['near_miss'].sort(reverse=True)
+                del stats['near_miss'][3:]
             return None
 
         index = ""
@@ -503,8 +524,15 @@ class USScanner:
 
     def _fetch_single_quote_yfinance(self, symbol, timeout=2):
         # yfinance 没有简单的 per-request timeout 参数，这里用 query1 chart 接口做单股兜底。
+        # includePrePost=true 时K线带盘后/盘前成交；非常规时段常规价冻结在收盘价，
+        # 财报夜的盘后异动（如 NVDA +4.7%）只有这里能看到。
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
-        res = requests.get(url, params={'range': '1d', 'interval': '1d'}, timeout=timeout)
+        res = requests.get(
+            url,
+            params={'range': '1d', 'interval': '5m', 'includePrePost': 'true'},
+            headers={'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'},
+            timeout=timeout,
+        )
         if res.status_code != 200:
             return None
         result = (res.json().get('chart', {}).get('result') or [None])[0]
@@ -515,6 +543,42 @@ class USScanner:
         prev_close = meta.get('previousClose') or meta.get('chartPreviousClose')
         if price is None or prev_close in (None, 0):
             return None
+
+        if in_us_extended_session():
+            # 盘后/盘前价以最近一次常规收盘价为基准，与富途的 after/pre_change_rate 口径一致。
+            # 盘前窗口(ET 4:00-9:30)优先 preMarketPrice，避免残留的前日盘后价盖掉新鲜盘前价。
+            post_p, pre_p = meta.get('postMarketPrice'), meta.get('preMarketPrice')
+            try:
+                from zoneinfo import ZoneInfo
+                _et_now = datetime.now(ZoneInfo('America/New_York'))
+                _et_min = _et_now.hour * 60 + _et_now.minute
+            except Exception:
+                _et_min = -1
+            in_pre_window = 240 <= _et_min < 570
+            if in_pre_window:
+                ext_price = pre_p or post_p
+                ext_label = '盘前' if pre_p else ('盘后' if post_p else None)
+            else:
+                ext_price = post_p or pre_p
+                ext_label = '盘后' if post_p else ('盘前' if pre_p else None)
+            if ext_price is None:
+                quotes = (result.get('indicators', {}).get('quote') or [{}])[0]
+                closes = [c for c in (quotes.get('close') or []) if c is not None]
+                # 最后一根K线与常规收盘价偏差>0.5%视为存在扩展时段成交（夜盘时为盘后收盘价）
+                if closes and abs(float(closes[-1]) - float(price)) / float(price) > 0.005:
+                    ext_price = closes[-1]
+                    ext_label = ext_label or '盘后'
+            try:
+                ext_price = float(ext_price) if ext_price is not None else None
+            except (TypeError, ValueError):
+                ext_price = None
+            if ext_price and ext_price > 0:
+                change_pct = (ext_price - float(price)) / float(price) * 100
+                candidate = self._build_quote_candidate(symbol, ext_price, price, change_pct, 'yfinance')
+                if candidate:
+                    candidate['price_type'] = ext_label or '扩展'
+                return candidate
+
         change_pct = (float(price) - float(prev_close)) / float(prev_close) * 100
         return self._build_quote_candidate(symbol, price, prev_close, change_pct, 'yfinance_single')
 
@@ -618,6 +682,8 @@ class USScanner:
         if total == 0:
             return results
         start_time = time.time()
+        self._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
+        self._drop_stats_lock = threading.Lock()
         stop_event = threading.Event()
         progress = {'done': 0}
         progress_lock = threading.Lock()
@@ -669,6 +735,10 @@ class USScanner:
         scanned = progress['done']
         print(f"    Finnhub扫描完成: {len(results)}/{total}只有效 "
               f"({scanned}只已扫描, {elapsed/60:.1f}分钟)")
+        drop_stats = self._layer1_drop_stats
+        near_miss = ', '.join(f"{sym}({sc}分)" for sc, sym in drop_stats['near_miss'])
+        print(f"    🗑️ 第一层评分<{LAYER2_CANDIDATE_MIN_SCORE}丢弃 {drop_stats['dropped']} 次"
+              f"(逐源计数)；贴近门槛Top3: {near_miss or '无'}")
         return results
 
     def scan_with_alphavantage(self, top_n=50, time_budget_seconds=1200):
