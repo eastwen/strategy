@@ -67,9 +67,14 @@ def check_alerts():
             data = json.load(f)
         
         if 'time' in data:
-            alert_time = data['time'][:19]  # 取到秒
-            alert_dt = datetime.datetime.strptime(alert_time, "%Y-%m-%dT%H:%M:%S")
-            now_dt = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+            alert_dt = datetime.datetime.fromisoformat(str(data['time']).replace('Z', '+00:00'))
+            # 新闻管道的无时区时间戳按服务器本地时间写入；带时区的时间戳
+            # 则用相同 tz 比较。旧逻辑把本地时间直接减 UTC，导致固定显示 -8h。
+            now_dt = (
+                datetime.datetime.now()
+                if alert_dt.tzinfo is None
+                else datetime.datetime.now(alert_dt.tzinfo)
+            )
             hours_diff = (now_dt - alert_dt).total_seconds() / 3600
             return hours_diff
         return 999  # 表示数据异常

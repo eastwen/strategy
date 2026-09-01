@@ -21,6 +21,7 @@ from runtime_config import (
     FUTU_PORT,
     NEWS_DB_PATH,
     PYTHON_BIN,
+    RUNTIME_DIR,
     STRATEGY_DIR,
     STRATEGY_POLICY,
     SYSTEM_VERSION,
@@ -31,6 +32,21 @@ from runtime_config import (
 
 # 仅第一层达到该分数的标的进入耗时的五源第二层；最终交易线仍由策略配置控制。
 LAYER2_CANDIDATE_MIN_SCORE = 65
+
+# 仅当20日均成交量和日均成交额同时很低时剔除，避免误伤高价低股数股票。
+MIN_LAYER1_AVG_VOLUME = 300_000
+MIN_LAYER1_AVG_DOLLAR_VOLUME = 5_000_000
+_AVG_VOLUME_WINDOW_DAYS = 20
+_LIQUIDITY_CACHE_PATH = RUNTIME_DIR / 'us-layer1-liquidity-cache.json'
+
+
+def current_us_market_date():
+    """纽约市场日期，用于排除尚未完成的当日K线。"""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo('America/New_York')).date()
+    except Exception:
+        return date.today()
 
 
 def in_us_extended_session():
@@ -69,8 +85,11 @@ class USScanner:
         self._futu_quote_disabled = False
         self._futu_lock = threading.Lock()  # 并发扫描时保护 Futu 行情上下文
         # 第一层低于门槛被丢弃的统计（含贴近门槛的标的，便于事后排查"为什么没推送"）
-        self._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
+        self._layer1_drop_stats = {'dropped': 0, 'near_miss': [], 'liquidity_dropped': 0}
         self._drop_stats_lock = threading.Lock()  # 并发扫描时保护丢弃统计
+        self._liquidity_cache = {}  # 第一层流动性闸门进程内缓存 (symbol -> bool)
+        self._liquidity_finnhub_disabled = False
+        self._liquidity_alphavantage_disabled = False
         # 市场情绪指标缓存（一次扫描只算一次，避免对 5251 只股票重复调用 VIX/CNN/期权 API）
         self._sentiment_cache = None
         self._sentiment_cache_time = 0
@@ -649,6 +668,209 @@ class USScanner:
         except Exception:
             return None
 
+    @staticmethod
+    def _liquidity_metrics(closes, volumes, source):
+        """用最近20个已完成交易日计算日均量和日均成交额。"""
+        pairs = []
+        for close, volume in zip(closes, volumes):
+            try:
+                close = float(close or 0)
+                volume = float(volume or 0)
+            except (TypeError, ValueError):
+                continue
+            if close > 0 and volume > 0:
+                pairs.append((close, volume))
+        pairs = pairs[-_AVG_VOLUME_WINDOW_DAYS:]
+        if len(pairs) < 5:
+            return None
+        avg_volume = sum(volume for _, volume in pairs) / len(pairs)
+        avg_dollar_volume = sum(close * volume for close, volume in pairs) / len(pairs)
+        return {
+            'avg_volume': round(avg_volume, 2),
+            'avg_dollar_volume': round(avg_dollar_volume, 2),
+            'passed': not (
+                avg_volume < MIN_LAYER1_AVG_VOLUME
+                and avg_dollar_volume < MIN_LAYER1_AVG_DOLLAR_VOLUME
+            ),
+            'source': source,
+            'sessions': len(pairs),
+        }
+
+    def _load_daily_liquidity_cache(self):
+        try:
+            payload = json.loads(_LIQUIDITY_CACHE_PATH.read_text(encoding='utf-8'))
+            if payload.get('date') == current_us_market_date().isoformat():
+                entries = payload.get('entries', {})
+                return entries if isinstance(entries, dict) else {}
+        except Exception:
+            pass
+        return {}
+
+    def _save_daily_liquidity_cache(self, entries):
+        try:
+            RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            tmp_path = _LIQUIDITY_CACHE_PATH.with_suffix('.tmp')
+            tmp_path.write_text(
+                json.dumps({'date': current_us_market_date().isoformat(), 'entries': entries}, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            os.replace(tmp_path, _LIQUIDITY_CACHE_PATH)
+        except Exception as e:
+            print(f"   ⚠️ 保存流动性日缓存失败: {e}")
+
+    def _fetch_liquidity_finnhub(self, symbol):
+        if not self.finnhub_key or self._liquidity_finnhub_disabled:
+            return None
+        end_ts = int(time.time())
+        start_ts = end_ts - 50 * 86400
+        try:
+            response = requests.get(
+                'https://finnhub.io/api/v1/stock/candle',
+                params={
+                    'symbol': symbol, 'resolution': 'D',
+                    'from': start_ts, 'to': end_ts, 'token': self.finnhub_key,
+                },
+                timeout=6,
+            )
+            if response.status_code in (401, 403, 429):
+                self._liquidity_finnhub_disabled = True
+                return None
+            data = response.json() if response.status_code == 200 else {}
+            rows = list(zip(data.get('t', []), data.get('c', []), data.get('v', [])))
+            today_et = current_us_market_date()
+            completed = [(close, volume) for ts, close, volume in rows
+                         if datetime.fromtimestamp(float(ts)).date() < today_et]
+            return self._liquidity_metrics(
+                [row[0] for row in completed], [row[1] for row in completed], 'finnhub'
+            )
+        except Exception:
+            return None
+
+    def _fetch_liquidity_alphavantage(self, symbol):
+        if not self.alphavantage_key or self._liquidity_alphavantage_disabled:
+            return None
+        try:
+            response = requests.get(
+                'https://www.alphavantage.co/query',
+                params={
+                    'function': 'TIME_SERIES_DAILY', 'symbol': symbol,
+                    'outputsize': 'compact', 'apikey': self.alphavantage_key,
+                },
+                timeout=8,
+            )
+            payload = response.json() if response.status_code == 200 else {}
+            if response.status_code == 429 or payload.get('Note') or payload.get('Information'):
+                self._liquidity_alphavantage_disabled = True
+                return None
+            series = payload.get('Time Series (Daily)', {})
+            completed = []
+            today_text = current_us_market_date().isoformat()
+            for day, row in sorted(series.items()):
+                if day >= today_text:
+                    continue
+                completed.append((row.get('4. close'), row.get('5. volume')))
+            return self._liquidity_metrics(
+                [row[0] for row in completed], [row[1] for row in completed], 'alphavantage'
+            )
+        except Exception:
+            return None
+
+    def _fetch_liquidity_futu(self, symbol):
+        try:
+            from futu import KLType, AuType, RET_OK
+            with self._futu_lock:
+                if self.quote_ctx is None:
+                    from futu import OpenQuoteContext
+                    self.quote_ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
+                ret, frame, _ = self.quote_ctx.request_history_kline(
+                    f'US.{symbol}', start='', end='', max_count=30,
+                    ktype=KLType.K_DAY, autype=AuType.QFQ,
+                )
+            if ret != RET_OK or frame is None or frame.empty:
+                return None
+            completed = frame[frame['time_key'].astype(str).str[:10] < current_us_market_date().isoformat()]
+            return self._liquidity_metrics(
+                completed['close'].tolist(), completed['volume'].tolist(), 'futu'
+            )
+        except Exception:
+            return None
+
+    def _filter_candidates_by_liquidity(self, candidates):
+        """汇总所有行情源候选后统一过滤；当天缓存避免每小时重复拉取。"""
+        if not candidates:
+            return []
+        entries = self._load_daily_liquidity_cache()
+        symbols = list(dict.fromkeys(
+            str(item.get('symbol', '')).replace('US.', '') for item in candidates if item.get('symbol')
+        ))
+        missing = [symbol for symbol in symbols if symbol not in entries]
+
+        # 主源一次批量拉取，明确排除当前尚未完成的交易日。
+        if missing:
+            try:
+                import yfinance as yf
+                for offset in range(0, len(missing), 100):
+                    batch = missing[offset:offset + 100]
+                    history = yf.download(
+                        batch, period='2mo', interval='1d', group_by='ticker',
+                        auto_adjust=False, progress=False, threads=True, timeout=15,
+                    )
+                    for symbol in batch:
+                        try:
+                            frame = history
+                            if getattr(history.columns, 'nlevels', 1) > 1:
+                                level_zero = history.columns.get_level_values(0)
+                                level_one = history.columns.get_level_values(1)
+                                if symbol in level_zero:
+                                    frame = history[symbol]
+                                elif symbol in level_one:
+                                    frame = history.xs(symbol, axis=1, level=1)
+                            frame = frame[
+                                frame.index.map(lambda value: value.date()) < current_us_market_date()
+                            ]
+                            metrics = self._liquidity_metrics(
+                                frame['Close'].tolist(), frame['Volume'].tolist(), 'yfinance'
+                            )
+                            if metrics:
+                                entries[symbol] = metrics
+                        except Exception:
+                            continue
+            except Exception as e:
+                print(f"   ⚠️ yfinance批量流动性数据失败，启用备用源: {e}")
+
+        # 仅为主源缺失的候选逐级兜底；任何源成功即停止，富途最后使用。
+        still_missing = [symbol for symbol in missing if symbol not in entries]
+        for symbol in still_missing:
+            metrics = (
+                self._fetch_liquidity_finnhub(symbol)
+                or self._fetch_liquidity_alphavantage(symbol)
+                or self._fetch_liquidity_futu(symbol)
+            )
+            if metrics:
+                entries[symbol] = metrics
+        self._save_daily_liquidity_cache(entries)
+
+        kept, dropped = [], []
+        for item in candidates:
+            symbol = str(item.get('symbol', '')).replace('US.', '')
+            metrics = entries.get(symbol)
+            if not metrics or metrics.get('passed', True):
+                kept.append(item)
+            else:
+                dropped.append((symbol, metrics))
+
+        self._layer1_drop_stats['liquidity_dropped'] = len(dropped)
+        for symbol, metrics in dropped:
+            print(
+                f"      💧 {symbol} 双低流动性剔除: 20日均量{metrics['avg_volume']:,.0f}股, "
+                f"日均成交额${metrics['avg_dollar_volume']:,.0f} ({metrics.get('source', 'unknown')})"
+            )
+        print(
+            f"   💧 统一流动性过滤: 候选{len(candidates)}只 → 保留{len(kept)}只, "
+            f"剔除{len(dropped)}只, 当日缓存命中{len(symbols) - len(missing)}只"
+        )
+        return kept
+
     def fetch_single_quote_with_fallbacks(self, symbol, per_source_timeout=2, per_symbol_budget=10):
         """单股逐源兜底：所有可用源都试过才放弃，但受单股总预算限制。"""
         started = time.time()
@@ -682,7 +904,7 @@ class USScanner:
         if total == 0:
             return results
         start_time = time.time()
-        self._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
+        self._layer1_drop_stats = {'dropped': 0, 'near_miss': [], 'liquidity_dropped': 0}
         self._drop_stats_lock = threading.Lock()
         stop_event = threading.Event()
         progress = {'done': 0}
@@ -1169,6 +1391,8 @@ class USScanner:
                             print(f"❌ 所有数据源都失败")
                             return []
 
+        # 无论本轮使用主源还是备用源，都在汇总后执行同一套流动性过滤。
+        results = self._filter_candidates_by_liquidity(results)
         results.sort(key=lambda x: x['base_score'], reverse=True)
         # 所有第一层评分达到候选线的标的进入五源深度评分；LLM 仍只处理五源 Top 20。
         all_candidates = results

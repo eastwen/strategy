@@ -429,11 +429,25 @@ AppId: cli_a93b169884f8dcc1
 ```
 
 
-## Promoted From Short-Term Memory (2026-07-08)
+## Promoted From Short-Term Memory (2026-09-01)
 
-<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:11:13 -->
-- 2026-07-04 美股扫描器超时修复: 第一层 Finnhub：0-20 分钟（扫到多少算多少）; 第二层四源+LLM：20-35 分钟（超 15 分钟也 break）; 保存+余量：35-40 分钟 [score=0.869 recalls=0 avg=0.620 source=memory/2026-07-04.md:11-13]
-<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:6:8 -->
-- 2026-07-04 美股扫描器超时修复: `scan_with_finnhub` 加 `time_budget_seconds=1200`（20分钟），超时 break 返回已扫到的部分结果; `scan_with_alphavantage` 同样加 `time_budget_seconds=1200`（20分钟）; `save_results` 第二层循环加 `layer2_budget=900`（15分钟），超时 break 走 flush [score=0.869 recalls=0 avg=0.620 source=memory/2026-07-04.md:6-8]
-<!-- openclaw-memory-promotion:memory:memory/2026-07-04.md:5:5 -->
-- 2026-07-04 美股扫描器超时修复: **修复**（strategy/us-scanner.py）： [score=0.859 recalls=0 avg=0.620 source=memory/2026-07-04.md:5-5]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-28.md:34:34 -->
+- ✅ 下单链路恢复 — 00:52~01:00 连开 4 只新仓（实弹验证）: LLM 修复后 auto-trader 立即行动，全部成交（FILLED_ALL）： [score=0.835 recalls=0 avg=0.620 source=memory/2026-08-28.md:34-34]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-28.md:52:52 -->
+- 🐛 CRM 2.5小时卖出→买回 — 跨午夜禁回补漏洞（已修，01:15）: **事实链**（closed-trades.json + auto-trader.log）： [score=0.810 recalls=0 avg=0.620 source=memory/2026-08-28.md:52-52]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-28.md:59:59 -->
+- 🐛 CRM 2.5小时卖出→买回 — 跨午夜禁回补漏洞（已修，01:15）: **修复**（01:15，auto-trader.py）：美股改按**美东交易日**判定（close_time 北京→美东换算后比对今天的美东日期）；港股不变（session 不跨日）。22:20卖/00:52买在美东均为 8-27 → 会被拦。auto-trader 每轮新进程，下周期自动生效，无需重启。 [score=0.810 recalls=0 avg=0.620 source=memory/2026-08-28.md:59-59]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:5:5 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: **east 13:16 问：NVDA 财报那么好为什么没推送？** [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:5-5]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:7:7 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: 根因链（日志证据齐全）： [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:7-7]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:8:11 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: NVDA 财报发布于北京 8-27 04:05（美东 8-26 16:05 后），盘后 +4.7%。; us-scanner 每小时扫描，但**非常规时段所有报价源都给冻结的常规收盘价**（当日 -1.59%）。; 第一层 `calculate_score(-1.59%)` = 50 分 < 65 → `_build_quote_candidate` 返回 None → 静默丢弃。; 链路 5 源（finnhub→alphavantage→yfinance→longbridge→futu）全部只报常规价，全灭 → NVDA 整夜消失在第一层。 [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:8-11]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:12:12 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: 白天 LLM 大量 429（doubao HTTP 429，今日 0-9 点每轮 700+ 次），另一独立问题待查。 [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:12-12]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:14:14 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: **修复方案**（另一会话起草、east 修正方向"futu 有额度不要动顺序"、本会话完成）： [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:14-14]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:15:18 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: 只升级链上第 3 位 yfinance：`includePrePost=true` + 5m K线，非常规时段取 postMarketPrice/preMarketPrice（盘前窗口 ET 4:00-9:30 优先 pre，防前日盘后残留价），基准=常规收盘价。; 源顺序一字未动，futu 额度反而更省（财报股不再落到 futu）。; 低于 65 分丢弃改为计数 + Top3 near-miss 留痕，每轮末尾打印汇总。; 新增 `in_us_extended_session()`（ET 时区判断）。 [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:15-18]
+<!-- openclaw-memory-promotion:memory:memory/2026-08-27.md:20:21 -->
+- NVDA 财报夜漏推送 — 根因 + 修复（commit e76d25c）: **验证（夜盘实测）**：NVDA → price=219.53 (+4.71%) score=85 price_type=盘后 src=yfinance； finnhub 冻结价 50 分被丢弃后链路自动落到 yfinance 接住；GE 常规路径不变；3 只迷你端到端 4.5s。 [score=0.803 recalls=0 avg=0.620 source=memory/2026-08-27.md:20-21]

@@ -1,12 +1,13 @@
 {
-  "timestamp": "2026-07-10T17:00:19.941030",
+  "timestamp": "2026-09-01T17:00:23.317815",
   "proposals": [
     {
+      "type": "sentiment",
+      "issue": "VHSI=17.3，市场平静",
+      "suggestion": "可以适当放宽条件，提高仓位到5%",
+      "priority": "低",
       "id": "HK001",
-      "category": "例行检查",
-      "issue": "策略运行正常",
-      "suggestion": "继续监控市场，定期检查策略表现",
-      "priority": "低"
+      "category": "市场情绪"
     }
   ]
 }

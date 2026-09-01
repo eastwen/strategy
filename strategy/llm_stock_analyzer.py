@@ -21,17 +21,18 @@ from runtime_config import NEWS_DB_PATH, load_api_keys
 _LLM_CONFIG = load_api_keys().get('llm', {})
 
 # 想加更多备用，直接往 LLM_FALLBACKS 里 append 就行。
-LLM_BASE_URL = os.getenv('LLM_BASE_URL') or _LLM_CONFIG.get('base_url') or 'https://maas-api.cn-huabei-1.xf-yun.com/v2'
+LLM_BASE_URL = os.getenv('LLM_BASE_URL') or _LLM_CONFIG.get('base_url') or 'https://note3-prev-api.askdiandian.com/v1'
 LLM_API_KEY = os.getenv('LLM_API_KEY') or _LLM_CONFIG.get('api_key', '')
-LLM_MODEL = os.getenv('LLM_MODEL') or _LLM_CONFIG.get('model') or 'xophunyuan7bmt'
+LLM_MODEL = os.getenv('LLM_MODEL') or _LLM_CONFIG.get('model') or 'dots3-note-prev'
 LLM_FALLBACKS = [                          # 备用模型（按顺序尝试，越靠前优先级越高）
-    "xop35qwen2b",         # 原主模型，现作为备用 (额度恢复后也能用)
-    "xop3qwen1b7",
-    "xop3qwen1b7",
-    "qwen3.6-35b-a3b",
-    "qwen3.5-plus-2026-04-20",
-    "glm-5.1",                         # 智谱 GLM
-    "kimi-k2.6",                       # 月之暗面 Kimi
+    "qwen3.7-plus-2026-05-26",
+    "qwen3.5-ocr",
+    "deepseek-v4-pro-0813",
+    "deepseek-v4-flash-0731",
+    "qwen3.7-flash-2026-07-15",
+    "dots-3-note-preview-free",
+    "gemini-3.7-flash-free",
+    "coding-kimi-k3-free",
 ]
 # ==========================
 
@@ -305,6 +306,28 @@ class LLMClient:
         if not self.api_key or self.api_key.startswith("sk-xxx"):
             print("⚠️ LLM API Key 未配置，请修改文件顶部 LLM_API_KEY")
 
+    @staticmethod
+    def _answer_from_reasoning(reasoning):
+        """Prefer the last complete JSON value before falling back to the last line."""
+        text = (reasoning or '').strip()
+        if not text:
+            return ''
+        decoder = json.JSONDecoder()
+        answers = []
+        for start, char in enumerate(text):
+            if char not in '[{':
+                continue
+            try:
+                value, length = decoder.raw_decode(text[start:])
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(value, (dict, list)):
+                answers.append((start + length, text[start:start + length].strip()))
+        if answers:
+            return max(answers, key=lambda item: item[0])[1]
+        lines = [line for line in text.splitlines() if line.strip()]
+        return lines[-1].strip() if lines else ''
+
     def _try_one(self, use_model, prompt, max_tokens, temperature):
         """调用单个模型一次。成功返回 (True, content)，失败返回 (False, 错误描述)。
 
@@ -314,35 +337,67 @@ class LLMClient:
         - 现在：拿不到 content 时回退到 reasoning_content 的最后一行；并强制把推理模型的
           max_tokens 抬到 800 以上，保证 content 有预算输出。
         """
-        is_reasoning = 'deepseek' in (use_model or '').lower() or 'r1' in (use_model or '').lower() or 'reasoner' in (use_model or '').lower()
+        model_name = (use_model or '').lower()
+        is_reasoning = (
+            'deepseek' in model_name
+            or 'reasoner' in model_name
+            or 'dots3-note-prev' in model_name
+            or 'dots-3-note-preview' in model_name
+            or bool(re.search(r'(^|[-_/])r1($|[-_/])', model_name))
+        )
         if is_reasoning and max_tokens < 800:
             max_tokens = 800
         try:
-            resp = requests.post(
-                f'{self.base_url}/chat/completions',
-                headers={
+            payload = {
+                'model': use_model,
+                'messages': [{'role': 'user', 'content': prompt}],
+                'max_tokens': max_tokens,
+                'temperature': temperature,
+            }
+            # Structured stock verification needs a direct JSON response.
+            # Qwen 3.x models on DashScope otherwise default to deep thinking,
+            # which can consume the response budget before content is emitted.
+            if 'dashscope.aliyuncs.com' in self.base_url and use_model.lower().startswith('qwen3'):
+                payload['enable_thinking'] = False
+
+            request_kwargs = {
+                'headers': {
                     'Authorization': f'Bearer {self.api_key}',
                     'Content-Type': 'application/json'
                 },
-                json={
-                    'model': use_model,
-                    'messages': [{'role': 'user', 'content': prompt}],
-                    'max_tokens': max_tokens,
-                    'temperature': temperature
-                },
-                timeout=90
+                'timeout': 90,
+            }
+            resp = requests.post(
+                f'{self.base_url}/chat/completions', json=payload, **request_kwargs
             )
+            # DashScope model capabilities differ across Qwen 3.x models.
+            # Retry once without this optional flag when a model rejects it.
+            if (
+                resp.status_code == 400
+                and 'enable_thinking' in payload
+                and 'enable_thinking' in resp.text
+            ):
+                payload.pop('enable_thinking', None)
+                resp = requests.post(
+                    f'{self.base_url}/chat/completions', json=payload, **request_kwargs
+                )
             if resp.status_code == 200:
                 msg = resp.json()['choices'][0]['message']
                 content = (msg.get('content') or '').strip()
                 if not content:
-                    # 推理模型：从 reasoning_content 末尾抽答案
                     reasoning = (msg.get('reasoning_content') or '').strip()
-                    if reasoning:
-                        last = [ln for ln in reasoning.splitlines() if ln.strip()]
-                        content = last[-1].strip() if last else ''
+                    content = self._answer_from_reasoning(reasoning)
                 if not content:
                     return False, 'content/reasoning 均为空'
+                # Some providers return quota/rate-limit errors as HTTP 200 text.
+                # Treat those as failures so the next model can be tried.
+                lower_content = content.lower()
+                error_markers = (
+                    'quota', 'rate limit', 'too many requests', 'recharge',
+                    'prevent abuse', '额度', '限流', '请求过于频繁',
+                )
+                if any(marker in lower_content for marker in error_markers):
+                    return False, f'provider error: {content[:160]}'
                 return True, content
             return False, f"HTTP {resp.status_code} - {resp.text[:100]}"
         except Exception as e:
@@ -587,14 +642,21 @@ T+3日|情绪预判|概率|市场走势
         """
         pos_pct    = market_data.get('pos_pct', 0)
         cash_pct   = market_data.get('cash_pct', 0)
-        vix        = market_data.get('vix', 20)
-        vhsi       = market_data.get('vhsi', 25)
+        vix        = market_data.get('vix')   # 可选，不传则不写进prompt
+        vhsi       = market_data.get('vhsi')  # 可选，不传则不写进prompt
         total_asset = market_data.get('total_asset', 0)
         positions  = market_data.get('positions', [])
         initial    = market_data.get('initial', 2000000)
         pnl_pct    = (total_asset - initial) / initial * 100 if initial > 0 else 0
 
         pos_list = self._format_enriched_positions(positions, max_n=8)
+
+        vol_lines = []
+        if vix is not None:
+            vol_lines.append(f"- 美股VIX: {float(vix):.1f}")
+        if vhsi is not None:
+            vol_lines.append(f"- 港股VHSI: {float(vhsi):.1f}")
+        vol_section = ("\n".join(vol_lines) + "\n") if vol_lines else ""
 
         prompt = f"""你是专业的风险管理分析师。请根据以下实时数据给出风险分析，重点关注“个股新闻利空”和“技术面走坏”的仓位。
 
@@ -603,9 +665,7 @@ T+3日|情绪预判|概率|市场走势
 - 持仓占比: {pos_pct:.1f}%，现金占比: {cash_pct:.1f}%
 - 持仓明细（含新闻情绪/技术指标）:
 {pos_list}
-- 美股VIX: {vix:.1f}
-- 港股VHSI: {vhsi:.1f}
-
+{vol_section}
 请给出2-3条风险提示，优先提及：
 - 某只持仓股 24h 情绪 ≤ 0.4（利空股）或出现明显负面新闻标题
 - 某只持仓 RSI 过高/过低 或 价格偏离 MA 走坏
@@ -1065,12 +1125,24 @@ adjust必须是-10到+10之间的整数。
                 reason = str(payload.get('reason', '') or '').strip()
             else:
                 normalized = cleaned.replace('，', ',')
-                parts = normalized.split(',', 1)
-                adjust_match = re.fullmatch(r'\s*([-+]?\d+)\s*', parts[0])
+                line_match = re.search(
+                    r'调整分\s*[:：]\s*([-+]?\d+)\s*(?:\|\s*理由\s*[:：]\s*)?(.*)',
+                    normalized,
+                    re.DOTALL,
+                )
+                if line_match:
+                    adjust = int(line_match.group(1))
+                    reason = line_match.group(2).strip()
+                    parts = None
+                    adjust_match = True
+                else:
+                    parts = normalized.split(',', 1)
+                    adjust_match = re.fullmatch(r'\s*([-+]?\d+)\s*', parts[0])
                 if not adjust_match:
                     raise ValueError('missing adjustment')
-                adjust = int(adjust_match.group(1))
-                reason = parts[1].strip() if len(parts) > 1 else ''
+                if parts is not None:
+                    adjust = int(adjust_match.group(1))
+                    reason = parts[1].strip() if len(parts) > 1 else ''
 
             if not -10 <= adjust <= 10:
                 raise ValueError('adjustment out of range')
@@ -1138,7 +1210,7 @@ class LLMExitAnalyzer:
             return self._exit_fallback(exit_data, "无API Key")
 
         prompt = self._build_exit_prompt(symbol, exit_data)
-        content = self.client.call(prompt, max_tokens=400, temperature=0.3)
+        content = self.client.call(prompt, max_tokens=800, temperature=0.3)
         if not content:
             return self._exit_fallback(exit_data, "LLM调用失败")
         return self._parse_exit(content, exit_data)
@@ -1217,27 +1289,50 @@ CNN恐慌贪婪: {d.get('cnn_fg', 'N/A')}
 3. 若"入场上下文说明"提示记录缺失，请明确写出"入场上下文不可考"，不要虚构入场原因。
 4. 禁止使用以下套话除非数据明确支持："入场量能偏弱""缺乏有效支撑""严格执行纪律""量价共振""日内短线敞口"。
 
-请用中文按以下格式输出，每段不超过2句：
-【结论】{'本次盈利的核心驱动' if is_profit else '本次亏损的核心原因'}（一句话，需引用具体数字或规则）
-【复盘】结合卖出时点指标与市场环境给出原因分析（2句以内）
-【教训】下次类似情况建议怎么改进策略（1句话，针对可验证的规则）
+请用中文输出严格 JSON 对象，仅含三个键，键名固定为："结论"、"复盘"、"教训"。
+每个键的值是短字符串：
+- "结论": {'本次盈利的核心驱动' if is_profit else '本次亏损的核心原因'}（一句话，需引用具体数字或规则）
+- "复盘": 结合卖出时点指标与市场环境给出原因分析（2句以内）
+- "教训": 下次类似情况建议怎么改进策略（1句话，针对可验证的规则）
 
-直接输出三段，不要其他多余文字。"""
+严格只输出 JSON，不要 ```json 代码块标记，不要任何多余文字或换行评注。示例：
+{{"结论": "...", "复盘": "...", "教训": "..."}}"""
 
     def _parse_exit(self, content, d):
         text = content.strip()
         verdict = detail = lesson = ''
+        # 去掉可能的 markdown 代码块围栏 ```json ... ``` / ``` ... ```
+        cleaned = re.sub(r'^[`\s]*json?[`\s]*', '', text, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r'```$', '', cleaned).strip()
         try:
-            for line in text.splitlines():
-                line = line.strip()
-                if line.startswith('【结论】'):
-                    verdict = line.replace('【结论】', '').strip()
-                elif line.startswith('【复盘】'):
-                    detail = line.replace('【复盘】', '').strip()
-                elif line.startswith('【教训】'):
-                    lesson = line.replace('【教训】', '').strip()
+            # 优先尝试 LLM 输出为 JSON 对象（{"结论":..., "复盘":..., "教训":...}）
+            payload = json.loads(cleaned)
+            if isinstance(payload, dict):
+                verdict = str(payload.get('结论') or payload.get('verdict') or payload.get('conclusion') or '').strip()
+                detail = str(payload.get('复盘') or payload.get('detail') or payload.get('analysis') or '').strip()
+                lesson = str(payload.get('教训') or payload.get('lesson') or '').strip()
         except Exception:
-            pass
+            # JSON 不完整（可能被截断），用正则尽量抽取三个字段
+            def _field(key):
+                m = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]*)"', cleaned)
+                return m.group(1).strip() if m else ''
+            verdict = _field('结论') or _field('verdict') or _field('conclusion')
+            detail = _field('复盘') or _field('detail') or _field('analysis')
+            lesson = _field('教训') or _field('lesson')
+
+        if not verdict and not detail and not lesson:
+            # JSON 解析失败，退回按行前缀解析
+            try:
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith('【结论】'):
+                        verdict = line.replace('【结论】', '').strip()
+                    elif line.startswith('【复盘】'):
+                        detail = line.replace('【复盘】', '').strip()
+                    elif line.startswith('【教训】'):
+                        lesson = line.replace('【教训】', '').strip()
+            except Exception:
+                pass
 
         if not verdict and not detail and not lesson:
             # 解析失败，原文兜底

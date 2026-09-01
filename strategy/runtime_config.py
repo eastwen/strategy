@@ -59,6 +59,9 @@ STRATEGY_POLICY = {
     "risk": {
         "cooldown_seconds": 86400, "hard_stop_loss_pct": -6,
         "trailing_profit_trigger_pct": 4, "trailing_drawdown_pct": 2,
+        # 2026-08-25 east：时间维度退出规则（条件版）
+        "us_max_holding_trading_days": 6, "hk_max_holding_trading_days": 10,
+        "time_exit_min_profit_pct": 2.0,
     },
 }
 
@@ -73,7 +76,7 @@ def format_strategy_policy_markdown() -> str:
 - 计分口径：多源原始证据先合并去重再统一计分，单源失败不扣分，五源中性基线合计50分
 - 交易候选线：综合评分≥{hk["min_score"]}；动态仓位：{hk["score_position_rules"]}
 - 单票上限：{hk["single_position_limit"] * 100:.0f}%；总仓位上限：{hk["total_position_limit"] * 100:.0f}%
-- 风控：ATR动态止盈止损，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损
+- 风控：ATR动态止盈止损，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损；时间维度退出：满{risk["hk_max_holding_trading_days"]}个交易日仍未触发止损止盈且浮盈<{risk["time_exit_min_profit_pct"]:.0f}%则全平认错，浮盈≥{risk["time_exit_min_profit_pct"]:.0f}%则止损提到保本位继续持有
 
 ### 🇺🇸 美股策略（{us["version"]}，配置更新：{us["updated"]}）
 - 五源共振后仅将 Top 20 送入 LLM；LLM失败或未通过不交易
@@ -81,7 +84,7 @@ def format_strategy_policy_markdown() -> str:
 - 交易候选线：综合评分≥{us["min_score"]}；非交易时段提醒线：{us["opp_alert_score"]}
 - 动态仓位：{us["score_position_rules"]}；单票上限：{us["single_position_limit"] * 100:.0f}%
 - 市场情绪总仓位：{us["market_sentiment_rules"]}
-- 风控：ATR动态止盈止损，浮盈≥{risk["trailing_profit_trigger_pct"]}%后从最高价回撤{risk["trailing_drawdown_pct"]}%触发追踪止盈，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损
+- 风控：ATR动态止盈止损，浮盈≥{risk["trailing_profit_trigger_pct"]}%后从最高价回撤{risk["trailing_drawdown_pct"]}%触发追踪止盈，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损；时间维度退出：满{risk["us_max_holding_trading_days"]}个交易日仍未触发止损止盈且浮盈<{risk["time_exit_min_profit_pct"]:.0f}%则全平认错，浮盈≥{risk["time_exit_min_profit_pct"]:.0f}%则止损提到保本位继续持有
 
 """
 
@@ -98,9 +101,12 @@ def format_strategy_policy_compact() -> str:
         f"单票上限{hk['single_position_limit'] * 100:.0f}%\n"
         f"美股交易线：{us['min_score']}分；非交易提醒线：{us['opp_alert_score']}分；"
         f"动态仓位：{us['score_position_rules']}；单票上限{us['single_position_limit'] * 100:.0f}%\n"
-        f"共同风控：浮亏达到{abs(risk['hard_stop_loss_pct']):.0f}%触发硬止损；"
+        f"共同风控：浮亏达到{abs(risk['hard_stop_loss_pct'])}%触发硬止损；"
         f"浮盈达到{risk['trailing_profit_trigger_pct']:.0f}%后，从最高价回撤"
-        f"{risk['trailing_drawdown_pct']:.0f}%触发追踪止盈；ATR目标优先于固定估算价"
+        f"{risk['trailing_drawdown_pct']:.0f}%触发追踪止盈；ATR目标优先于固定估算价；"
+        f"时间维度退出：美股满{risk['us_max_holding_trading_days']}个/港股满{risk['hk_max_holding_trading_days']}个交易日"
+        f"仍未触发止损止盈且浮盈<{risk['time_exit_min_profit_pct']:.0f}%则全平认错，"
+        f"浮盈达标则止损提到保本位继续持有（按交易日计，优先级低于止损止盈）"
     )
 
 

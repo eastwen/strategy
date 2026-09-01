@@ -14,6 +14,7 @@ import sys
 import os
 import json
 import time
+import re
 import requests
 from datetime import datetime, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
@@ -40,6 +41,10 @@ except Exception as e:
     TECH_INDICATORS_AVAILABLE = False
     print(f"⚠️ 技术指标模块不可用: {e}")
 
+# 2026-08-25 east：时间维度退出规则参数（条件版）
+# 美股满6个/港股满10个交易日仍未触发止损止盈时：浮盈低于该值->全平认错；高于->止损提保本继续持有
+TIME_EXIT_MIN_PROFIT = 2.0   # 百分比
+
 # 这些状态的订单已不再可成交，不能阻塞新单或被重复撤销。
 TERMINAL_ORDER_STATUSES = {
     OrderStatus.FILLED_ALL, OrderStatus.CANCELLED_ALL, OrderStatus.FAILED,
@@ -59,6 +64,7 @@ class AutoTrader:
         self.open_positions_file = str(DATA_DIR / 'open-positions.json')
         self.staged_reductions_file = str(DATA_DIR / 'staged-reductions.json')
         self._market_sentiment_cache = {'data': None, 'timestamp': 0}
+        self._llm_neg_verify_cache = {}   # 2026-08-25 重大利空LLM复核缓存 {key: (ts, ok, reason)}
 
     def save_open_position(self, symbol, shares, entry_price, market='us', score=0, reasons=None, risk_targets=None):
         """保存入场记录
@@ -163,6 +169,103 @@ class AutoTrader:
         if peak >= activation_pct and drawdown >= drawdown_pct:
             return True, f'移动止盈触发(峰值浮盈{peak:+.2f}%，当前{current:+.2f}%，回撤{drawdown:.2f}%≥{drawdown_pct:.2f}%)'
         return False, ''
+
+    def _count_trading_days(self, market, start_dt):
+        """计算从入场日到今天的市场交易日数（不含入场当日）。"""
+        try:
+            from trading_calendar import TradingCalendar
+            cal = TradingCalendar()
+            check = start_dt.date()
+            today = datetime.now().date()
+            is_us = str(market).lower() == 'us'
+            days = 0
+            while check < today:
+                check = check + timedelta(days=1)
+                if check >= today:
+                    break
+                if is_us:
+                    ok, _ = cal.is_us_trading_day(check)
+                else:
+                    ok, _ = cal.is_hk_trading_day(check)
+                if ok:
+                    days += 1
+            return days
+        except Exception:
+            # 日历不可用时退化为自然日（宁早勿晚）
+            return (datetime.now().date() - start_dt.date()).days
+
+    def check_time_exit(self, symbol, pl_pct, entry_ctx, market):
+        """2026-08-25 east：时间维度退出规则（条件版）。
+
+        原v1.6"最大持仓6天无条件全平"在重构时丢弃，本版改为条件触发：
+        - 美股满6个交易日 / 港股满10个交易日仍未触发任何止损止盈时：
+          * 浮盈 < TIME_EXIT_MIN_PROFIT(2%)：信号未兑现，全平认错离场 -> (True, 原因)
+          * 浮盈 >= 2%：趋势未坏，不平仓，止损提到保本位 -> (False, 提示文案)
+        - 未到期 -> (False, '')
+        优先级最低：只接住现有规则漏掉的僵尸仓，不与止损/止盈竞争。
+        """
+        max_days = 6 if str(market).lower() == 'us' else 10
+        entry_time = entry_ctx.get('entry_time') if entry_ctx else None
+        if not entry_time:
+            return False, ''
+        try:
+            start_dt = datetime.fromisoformat(str(entry_time).replace('Z', '+00:00')).replace(tzinfo=None)
+        except Exception:
+            return False, ''
+        tdays = self._count_trading_days(market, start_dt)
+        if tdays < max_days:
+            return False, ''
+        try:
+            pl = float(pl_pct or 0)
+        except Exception:
+            pl = 0.0
+        sym_label = symbol
+        if pl < TIME_EXIT_MIN_PROFIT:
+            reason = (f'时间维度退出(满{tdays}个交易日浮盈{pl:+.2f}%<{TIME_EXIT_MIN_PROFIT:.0f}%，'
+                      f'信号未兑现全平，上限美股6/港股10个交易日)')
+            return True, reason
+        # 浮盈达标：把止损提到保本位（只收紧不放松），让利润奔跑
+        note = self._raise_stop_to_breakeven(symbol, entry_ctx)
+        if note:
+            return False, f'时间维度检查(满{tdays}个交易日浮盈{pl:+.2f}%≥{TIME_EXIT_MIN_PROFIT:.0f}%，不平仓，{note})'
+        return False, f'时间维度检查(满{tdays}个交易日浮盈{pl:+.2f}%，趋势保留)'
+
+    def _raise_stop_to_breakeven(self, symbol, entry_ctx):
+        """超期盈利仓的止损提到入场价（保本位）。只收紧不放松，改 open-positions.json。"""
+        try:
+            entry_price = float(entry_ctx.get('entry_price') or 0)
+        except Exception:
+            entry_price = 0.0
+        if entry_price <= 0:
+            return ''
+        try:
+            with open(self.open_positions_file, 'r') as f:
+                positions = json.load(f)
+        except Exception:
+            return ''
+        target = self.normalize_symbol(symbol)
+        changed = False
+        for p in positions:
+            if self.normalize_symbol(p.get('symbol', '')) != target:
+                continue
+            old_stop = p.get('atr_stop')
+            try:
+                old_stop_f = float(old_stop) if old_stop is not None else None
+            except Exception:
+                old_stop_f = None
+            # 只收紧：现止损高于入场价（已保本/锁盈）则不动
+            if old_stop_f is not None and old_stop_f >= entry_price:
+                continue
+            p['atr_stop'] = entry_price
+            p.setdefault('stop_history', []).append(
+                {'time': datetime.now().isoformat(), 'action': 'breakeven', 'from': old_stop, 'to': entry_price,
+                 'reason': '时间维度规则：超期盈利仓止损提保本'})
+            changed = True
+        if changed:
+            with open(self.open_positions_file, 'w') as f:
+                json.dump(positions, f, ensure_ascii=False, indent=2)
+            return '止损已提到保本位'
+        return '止损已在保本位上方，维持不动'
 
     def remove_open_position(self, symbol):
         """移除入场记录"""
@@ -350,10 +453,11 @@ class AutoTrader:
                         'tp_trend': pos.get('tp_trend'),
                         'tp_first': pos.get('tp_first'),
                         'entry_price': pos.get('entry_price'),
+                        'entry_time': pos.get('entry_time'),  # 2026-08-18 补：回查卖单 LLM 复盘需要持有天数
                     }
         except Exception:
             pass
-        return {'entry_score': 0, 'entry_reasons': [], 'atr_stop': None, 'tp_trend': None, 'tp_first': None, 'entry_price': None}
+        return {'entry_score': 0, 'entry_reasons': [], 'atr_stop': None, 'tp_trend': None, 'tp_first': None, 'entry_price': None, 'entry_time': None}
 
     def save_closed_trade(self, symbol, side, shares, entry_price, exit_price, pnl_pct, reason, market='us', stop_type=None, entry_score=0, llm_review=None, entry_reasons=None, order_id=None):
         """保存平仓记录
@@ -715,15 +819,39 @@ class AutoTrader:
                         entry = float(item.get('entry_price', 0) or 0)
                         pnl_pct = ((price - entry) / entry * 100) if entry else 0
                         entry_ctx = self._lookup_entry_context(item['symbol'])
+                        # 2026-08-18 east 修复: 回查成交路径补 LLM 复盘，与 execute_trade 即时成交路径对齐
+                        # 此前待确认卖单成交后只发原始原因，无 LLM 复盘（如 US.STEP/US.AIRG）
+                        llm_review = None
+                        llm_reason = item.get('reason', '自动平仓')
+                        try:
+                            exit_payload = self._build_exit_payload(
+                                symbol=item['symbol'],
+                                market=item.get('market', 'us'),
+                                raw_reason=item.get('reason', '自动平仓'),
+                                entry_price=entry,
+                                exit_price=price,
+                                pnl_pct=pnl_pct,
+                                entry_time=entry_ctx.get('entry_time', '') or '',
+                                entry_score=entry_ctx.get('entry_score', 0),
+                                entry_reasons=entry_ctx.get('entry_reasons', []),
+                            )
+                            from llm_stock_analyzer import analyze_exit
+                            exit_result = analyze_exit(item['symbol'], exit_payload)
+                            llm_reason = exit_result.get('llm_reason') or llm_reason
+                            if llm_reason and llm_reason != item.get('reason', '自动平仓'):
+                                llm_review = llm_reason
+                        except Exception as e:
+                            print(f"⚠️ {item['symbol']} 回查路径 LLM 复盘失败，回退原始原因: {e}")
                         self.save_closed_trade(
                             item['symbol'], 'SELL', qty, entry, price, pnl_pct,
                             item.get('reason', '自动平仓'), item.get('market', 'us'),
                             entry_score=entry_ctx.get('entry_score', 0),
                             entry_reasons=entry_ctx.get('entry_reasons', []),
                             order_id=oid,
+                            llm_review=llm_review,
                         )
                         from feishu_pusher import FeishuPusher
-                        FeishuPusher().send_sell_notification(item['symbol'], qty, price, qty * price, pnl_pct, item.get('reason', '自动平仓'), oid, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                        FeishuPusher().send_sell_notification(item['symbol'], qty, price, qty * price, pnl_pct, llm_reason, oid, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
                     self._sync_open_positions_from_futu(item.get('market', 'us'))
                     del data[oid]; changed = True
                 elif status in ('CANCELLED_ALL', 'FAILED', 'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT'):
@@ -1400,14 +1528,29 @@ class AutoTrader:
 
         # 当天已有真实 SELL 成交的标的不回补；分批卖出也会触发该买入限制。
         # 此检查仅由买入前的 should_trade 调用，完全不影响后续分批卖出。
-        today = datetime.now().date().isoformat()
+        # 2026-08-28 east 修复：美股"当天"按美东交易日判定。原实现用北京日历日，
+        # 而美股 session 跨北京午夜（21:30→次日04:00），22:20 止盈卖出、00:52 重新买回
+        # 会因跨日绕过禁令（今晚 CRM 实例）。港股 session 不跨日，维持北京日历日。
+        raw_upper = (symbol or '').upper()
+        is_hk = raw_upper.startswith('HK.') or raw_upper.isdigit()
+        if is_hk:
+            today = datetime.now().date().isoformat()
+        else:
+            today = datetime.now(ZoneInfo('America/New_York')).date().isoformat()
+        target_tz = ZoneInfo('Asia/Shanghai') if is_hk else ZoneInfo('America/New_York')
         try:
             with open(self.closed_trades_file, 'r') as f:
                 closed_trades = json.load(f) or []
             for trade in reversed(closed_trades):
                 if trade.get('side') != 'SELL':
                     continue
-                if not str(trade.get('close_time', '')).startswith(today):
+                try:
+                    dt = datetime.fromisoformat(str(trade.get('close_time', '')).replace('Z', '+00:00'))
+                except Exception:
+                    continue
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+                if dt.astimezone(target_tz).date().isoformat() != today:
                     continue
                 if normalize(str(trade.get('symbol', ''))) == sym:
                     return False, '今日已卖出，禁止回补'
@@ -2132,7 +2275,117 @@ class AutoTrader:
         market_val = float(pos.get('market_val', 0) or 0)
         return market_val / shares if shares > 0 else 0
 
-    def has_major_negative_alert(self, symbol):
+    def llm_verify_major_negative(self, symbol, title, alert=None, position=None):
+        """重大利空卖出前由 LLM 复核真实性、严重度和建议动作。
+
+        规则层命中"重大利空"后，先把新闻标题+持仓代码交给 LLM 判断主语与方向：
+        - full_exit: 放行全平
+        - reduce_50: 先减仓 50%
+        - ignore: 主语不符、旧闻或影响有限，不处理
+        - LLM 不可用/超时/解析失败 -> 照旧放行 (True)，风控不能因 LLM 挂掉而失效
+        按 标题+symbol 缓存判定结果，同一新闻不重复调用。
+        """
+        if not title:
+            return True, ''
+        cache_key = f"{symbol}|{title[:80]}"
+        now = time.time()
+        cached = self._llm_neg_verify_cache.get(cache_key)
+        if cached and now - cached[0] < 6 * 3600:
+            return cached[1], cached[2]
+
+        alert = alert if isinstance(alert, dict) else {}
+        position = position if isinstance(position, dict) else {}
+        clean_sym = (symbol or '').replace('US.', '').replace('HK.', '')
+        market = 'hk' if str(symbol).upper().startswith('HK.') else 'us'
+        technical = {}
+        try:
+            ti = HKTechIndicators() if market == 'hk' else USTechIndicators()
+            technical = ti.get_llm_snapshot(symbol) or {}
+            ti.close()
+        except Exception as e:
+            technical = {'error': str(e)[:80]}
+
+        context = {
+            'news': {
+                'title': title,
+                'summary': alert.get('summary') or alert.get('content') or alert.get('description') or '',
+                'source': alert.get('source') or '',
+                'published_at': alert.get('published_at') or alert.get('time') or alert.get('timestamp') or '',
+                'importance': alert.get('importance') or '',
+                'sentiment': alert.get('sentiment'),
+            },
+            'position': {
+                'pl_pct': position.get('pl_ratio'),
+                'cost_price': position.get('cost_price'),
+                'current_price': self.get_position_price(position) if position else None,
+                'shares': position.get('shares'),
+            },
+            'technical': technical,
+        }
+        prompt = (
+            '你是交易风控助手。一条新闻被规则系统判定为持仓股票的重大利空。'
+            '请结合新闻、持仓盈亏和技术面，在卖出前复核真实性与严重度。\n\n'
+            f'持仓股票代码: {clean_sym}\n'
+            f'上下文数据: {json.dumps(context, ensure_ascii=False, default=str)}\n\n'
+            '判断标准：\n'
+            '1. 新闻主语（报道对象）是否就是这只股票本身？如果新闻主语是其他公司，'
+            '本股只是在标题中被提及/对比，则判定不成立。\n'
+            '2. 对该股票是否构成实质利空（业绩暴雷/被调查/诉讼/召回/指引下调等）？'
+            '行业普跌、竞争对手利空、宏观消息不算。\n'
+            '3. action只能是 full_exit、reduce_50、ignore：'
+            '利空明确且技术同步恶化用full_exit；利空真实但技术尚未完全破坏用reduce_50；'
+            '主语错配、旧闻或影响有限用ignore。\n'
+            '4. 只依据输入数据，不得编造新闻、价格或指标。\n\n'
+            '只输出JSON（不要其他文字）：\n'
+            '{"is_subject": true/false, "is_negative": true/false, '
+            '"action": "full_exit/reduce_50/ignore", "confidence": 0-1, "reason": "一句话理由"}\n'
+            '主语或利空任一为false时，action必须是ignore。'
+        )
+        verdict_ok = True   # 默认放行（LLM不可用/超时 -> 照平）
+        verdict_reason = ''
+        try:
+            from llm_stock_analyzer import LLMClient
+            client = LLMClient()
+            if not client.api_key or client.api_key.startswith('sk-xxx'):
+                print(f"  🤖 LLM复核跳过(未配置Key) -> 维持原判定全平: {symbol}")
+                return True, ''
+            result = client.call(prompt, max_tokens=300, temperature=0)
+            if result:
+                m = re.search(r'\{[^{}]*\}', result, re.S)
+                if m:
+                    verdict = json.loads(m.group(0))
+                    is_subject = bool(verdict.get('is_subject'))
+                    is_negative = bool(verdict.get('is_negative'))
+                    confidence = float(verdict.get('confidence', 0) or 0)
+                    reason = str(verdict.get('reason', ''))[:80]
+                    action = str(verdict.get('action', 'full_exit')).strip().lower()
+                    if not (is_subject and is_negative):
+                        action = 'ignore'
+                    if action not in ('full_exit', 'reduce_50', 'ignore'):
+                        action = 'full_exit'
+                    if action == 'full_exit':
+                        verdict_ok = True
+                        verdict_reason = f"[FULL]LLM复核建议全平({confidence:.2f}): {reason}"
+                        print(f"  🤖 LLM复核确认重大利空 -> 放行全平: {symbol} ({reason})")
+                    elif action == 'reduce_50':
+                        verdict_ok = True
+                        verdict_reason = f"[REDUCE50]LLM复核建议减仓50%({confidence:.2f}): {reason}"
+                        print(f"  🤖 LLM复核确认利空但技术未完全破坏 -> 减仓50%: {symbol} ({reason})")
+                    else:
+                        verdict_ok = False
+                        verdict_reason = f"LLM复核建议不处理: {reason}"
+                        print(f"  🤖 LLM复核拦截重大利空误判 -> 不处理: {symbol} ({reason})")
+                else:
+                    print(f"  🤖 LLM复核返回非JSON，维持原判定: {symbol}")
+            else:
+                print(f"  🤖 LLM复核不可用(调用失败) -> 维持原判定全平: {symbol}")
+        except Exception as e:
+            print(f"  🤖 LLM复核异常({e}) -> 维持原判定全平: {symbol}")
+
+        self._llm_neg_verify_cache[cache_key] = (now, verdict_ok, verdict_reason)
+        return verdict_ok, verdict_reason
+
+    def has_major_negative_alert(self, symbol, position=None):
         """检查是否有结构化重大利空命中该标的。"""
         try:
             with open(str(DATA_DIR / 'alerts.json'), 'r') as f:
@@ -2155,8 +2408,17 @@ class AutoTrader:
             is_major = importance in ('高', '重大', '高危') or '重大' in alert_type
             is_negative = sentiment <= 0.2 or '利空' in alert_type or '利空' in title
             if is_major and is_negative:
-                return True, title[:80] or alert_type
+                # 2026-08-25 east：命中重大利空后先过 LLM 复核，拦截"主语错配"类误杀
+                verified, verify_reason = self.llm_verify_major_negative(symbol, title, alert, position)
+                if not verified:
+                    return False, ''
+                detail = verify_reason or title[:80] or alert_type
+                return True, detail
         return False, ''
+
+    @staticmethod
+    def major_negative_requests_reduction(reason):
+        return str(reason or '').startswith('[REDUCE50]')
 
     def check_macd_stabilized(self, symbol, market='us'):
         """MACD是否企稳：MACD在线上方视为企稳。无法获取时按未企稳处理。"""
@@ -2310,10 +2572,13 @@ class AutoTrader:
         # 否则一旦标的进入 stage1_done / tightened_stop，新利空被 staged 逻辑截胡，
         # 永远走不到 run() 里 06-23 重构后的 "major_negative → 全平" 分支。
         try:
-            major_negative, neg_reason = self.has_major_negative_alert(sym)
+            major_negative, neg_reason = self.has_major_negative_alert(sym, pos_data)
         except Exception:
             major_negative, neg_reason = False, ''
         if major_negative and shares > 0:
+            if self.major_negative_requests_reduction(neg_reason):
+                print(f"  🟠 {key}: 已处于分级减仓状态，LLM建议减仓50%，不重复卖出 ({neg_reason})")
+                return True
             print(f"  🚨 {key}: staged 状态下命中重大利空 → 立即全平剩余 {shares} 股 ({neg_reason})")
             self.execute_position_sell(pos_data, shares, f'重大利空触发staged剩余全平: {neg_reason}', 'staged_major_negative_full_exit', market)
             return True
@@ -2503,8 +2768,10 @@ class AutoTrader:
             else:
                 self.reconcile_open_positions('hk', hk_account.get('positions', []))
 
-        if not us_trading and not hk_trading:
-            # 仅美股非交易时间发送机会通知，港股交易时间正常交易不发
+        if not us_trading:
+            # 美股非交易时段：发送美股机会通知（与港股交易状态无关）
+            # 2026-08-21 east 指正：港股交易时间、美股非交易时段也应正常推送，
+            # 不应再被 `and not hk_trading` 阻断（原来港股盘中会吞掉美股机会推送）。
             now_time = datetime.now().time()
             market_status = ""
             # 美股非交易时段划分（与 us-scanner 交易时段 21:30-04:00 对齐）
@@ -2574,8 +2841,10 @@ class AutoTrader:
                     except Exception as e:
                         print(f"  ⚠️ 发送美股{market_status}机会通知失败: {e}")
 
-            print("⏸️ 非交易时间，仅发送机会通知")
-            return
+            if not hk_trading:
+                print("⏸️ 非交易时间，仅发送机会通知")
+                return
+            # 港股仍在交易：美股机会通知已推送，继续走下方港股交易流程
 
         # 显示账户状态
         if us_account:
@@ -2649,7 +2918,7 @@ class AutoTrader:
             if self.process_staged_exit(pos, market_to_check):
                 continue
 
-            major_negative, negative_reason = self.has_major_negative_alert(sym)
+            major_negative, negative_reason = self.has_major_negative_alert(sym, pos)
 
             # 止损条件：动态 ATR 止损 或 固定 -6% 兜底 或 结构化重大利空触发
             hit_stop = atr_stop_hit or pl_pct < -6 or major_negative
@@ -2659,12 +2928,17 @@ class AutoTrader:
                 # 2026-06-23 east 重构：默认直接全平，只有插针场景才走分级
                 # 重大利空 → 一律全平（利空不会反弹，等于送钱）
                 if major_negative:
-                    positions_to_close.append(sym)
-                    if pl_pct > 0:
-                        stage_reduce_reasons[sym] = '重大利空触发全平(盈利中风控)' + f': {negative_reason}'
-                        print(f"    ⚠️ 重大利空→直接全平! {negative_reason}")
+                    reduce_only = self.major_negative_requests_reduction(negative_reason)
+                    hard_stop_also_hit = bool(atr_stop_hit or pl_pct < -6)
+                    if reduce_only and not hard_stop_also_hit:
+                        positions_to_stage_reduce.append(sym)
+                        stage_reduce_reasons[sym] = f'重大利空LLM复核建议减仓50%: {negative_reason}'
+                        print(f"    🟠 重大利空→先减仓50%! {negative_reason}")
                     else:
-                        stage_reduce_reasons[sym] = '重大利空触发全平' + f': {negative_reason}'
+                        positions_to_close.append(sym)
+                        profit_note = '(盈利中风控)' if pl_pct > 0 else ''
+                        hard_note = '(同时命中硬止损)' if hard_stop_also_hit else ''
+                        stage_reduce_reasons[sym] = f'重大利空触发全平{profit_note}{hard_note}: {negative_reason}'
                         print(f"    ⚠️ 重大利空→直接全平! {negative_reason}")
                     continue
 
@@ -2697,6 +2971,23 @@ class AutoTrader:
                 positions_to_take_profit.append(sym)
                 take_profit_reasons[sym] = f'ATR动态止盈(现价${cur_price:.2f}≥${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)'
                 print(f"    🎯 触发ATR动态止盈! (现价${cur_price:.2f}≥止盈线${entry_tp_trend}, 浮盈{pl_pct:+.2f}%)")
+
+            # 2026-08-25 east：加回时间维度退出规则（条件版，原v1.6“到天无条件全平”废弃）
+            # 仅当上方止损/止盈分支都未命中时才检查；美股第6个交易日 / 港股第10个交易日：
+            #   - 浮盈 < 2%（信号未兑现）-> 全平认错离场
+            #   - 浮盈 ≥ 2%（趋势未坏）-> 不平仓，只把止损提到入场价（保本位）
+            else:
+                try:
+                    timed_exit = self.check_time_exit(sym, pl_pct, entry_ctx, market_to_check)
+                except Exception as te_err:
+                    print(f"    ⚠️ 时间维度规则异常({te_err})，跳过")
+                    timed_exit = (False, '')
+                if timed_exit[0]:
+                    positions_to_close.append(sym)
+                    stage_reduce_reasons[sym] = timed_exit[1]
+                    print(f"    ⏰ {timed_exit[1]}")
+                elif timed_exit[1]:  # 保本止损提示（不平仓）
+                    print(f"    ⏰ {timed_exit[1]}")
 
         # 执行分级减仓第一步
         print(f"  📋 分级减仓列表: {positions_to_stage_reduce}")
@@ -3126,19 +3417,27 @@ if __name__ == '__main__':
                         if trader.process_staged_exit(pos, 'us'):
                             continue
 
-                        major_negative, negative_reason = trader.has_major_negative_alert(sym)
+                        major_negative, negative_reason = trader.has_major_negative_alert(sym, pos)
 
                         # 止损：ATR动态优先，-6%兜底；重大利空无条件全平
                         if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             # 重大利空 → 一律全平
                             if major_negative:
-                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
-                                print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
-                                success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'us')
-                                if success:
-                                    print(f"[{now}]   ✅ 全平完成: {sym}")
+                                reduce_only = trader.major_negative_requests_reduction(negative_reason)
+                                hard_stop_also_hit = bool(atr_stop_hit_d or pl_pct < -6)
+                                if reduce_only and not hard_stop_also_hit:
+                                    print(f"[{now}]   🟠 重大利空→先减仓50%! {negative_reason}")
+                                    success = trader.trigger_stage_one_reduction(
+                                        pos, f'重大利空LLM复核建议减仓50%: {negative_reason}', 'us'
+                                    )
                                 else:
-                                    print(f"[{now}]   ❌ 全平失败: {sym}")
+                                    close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
+                                    print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
+                                    success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'us')
+                                if success:
+                                    print(f"[{now}]   ✅ 重大利空风控执行完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 重大利空风控执行失败: {sym}")
                                 continue
 
                             if atr_stop_hit_d:
@@ -3188,6 +3487,23 @@ if __name__ == '__main__':
                             else:
                                 print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
 
+                        # 2026-08-25 east：时间维度退出（条件版，优先级最低，只接僵尸仓）
+                        else:
+                            try:
+                                timed_exit_d = trader.check_time_exit(sym, pl_pct, entry_ctx_d, 'us')
+                            except Exception as te_err:
+                                print(f"[{now}]   ⚠️ 时间维度规则异常({te_err})，跳过")
+                                timed_exit_d = (False, '')
+                            if timed_exit_d[0]:
+                                print(f"[{now}]   ⏰ {timed_exit_d[1]}")
+                                success = trader.execute_position_sell(pos, int(shares), timed_exit_d[1], 'time_exit', 'us')
+                                if success:
+                                    print(f"[{now}]   ✅ 时间维度全平完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 时间维度全平失败: {sym}")
+                            elif timed_exit_d[1]:
+                                print(f"[{now}]   ⏰ {timed_exit_d[1]}")
+
                 # ===== 港股止损/止盈检查（2026-06-23 补上，原本daemon模式遗漏）=====
                 if hk_account and hk_account.get('positions'):
                     print(f"[{now}] 🔍 检查港股止损/止盈...")
@@ -3220,18 +3536,26 @@ if __name__ == '__main__':
                         if trader.process_staged_exit(pos, 'hk'):
                             continue
 
-                        major_negative, negative_reason = trader.has_major_negative_alert(sym)
+                        major_negative, negative_reason = trader.has_major_negative_alert(sym, pos)
 
                         # 同美股：ATR动态优先，-6%兜底
                         if atr_stop_hit_d or pl_pct < -6 or major_negative:
                             if major_negative:
-                                close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
-                                print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
-                                success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'hk')
-                                if success:
-                                    print(f"[{now}]   ✅ 全平完成: {sym}")
+                                reduce_only = trader.major_negative_requests_reduction(negative_reason)
+                                hard_stop_also_hit = bool(atr_stop_hit_d or pl_pct < -6)
+                                if reduce_only and not hard_stop_also_hit:
+                                    print(f"[{now}]   🟠 重大利空→先减仓50%! {negative_reason}")
+                                    success = trader.trigger_stage_one_reduction(
+                                        pos, f'重大利空LLM复核建议减仓50%: {negative_reason}', 'hk'
+                                    )
                                 else:
-                                    print(f"[{now}]   ❌ 全平失败: {sym}")
+                                    close_reason = '重大利空触发全平' + ('(盈利中风控)' if pl_pct > 0 else '') + f': {negative_reason}'
+                                    print(f"[{now}]   ⚠️ 重大利空→直接全平! {negative_reason}")
+                                    success = trader.execute_position_sell(pos, int(shares), close_reason, 'major_negative', 'hk')
+                                if success:
+                                    print(f"[{now}]   ✅ 重大利空风控执行完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 重大利空风控执行失败: {sym}")
                                 continue
 
                             if atr_stop_hit_d:
@@ -3278,6 +3602,23 @@ if __name__ == '__main__':
                                 print(f"[{now}]   ✅ 止盈完成: {sym}")
                             else:
                                 print(f"[{now}]   ❌ 止盈未完成，按订单状态继续处理")
+
+                        # 2026-08-25 east：时间维度退出（条件版，优先级最低，只接僵尸仓）
+                        else:
+                            try:
+                                timed_exit_d = trader.check_time_exit(sym, pl_pct, entry_ctx_d, 'hk')
+                            except Exception as te_err:
+                                print(f"[{now}]   ⚠️ 时间维度规则异常({te_err})，跳过")
+                                timed_exit_d = (False, '')
+                            if timed_exit_d[0]:
+                                print(f"[{now}]   ⏰ {timed_exit_d[1]}")
+                                success = trader.execute_position_sell(pos, int(shares), timed_exit_d[1], 'time_exit', 'hk')
+                                if success:
+                                    print(f"[{now}]   ✅ 时间维度全平完成: {sym}")
+                                else:
+                                    print(f"[{now}]   ❌ 时间维度全平失败: {sym}")
+                            elif timed_exit_d[1]:
+                                print(f"[{now}]   ⏰ {timed_exit_d[1]}")
 
                 # 获取机会
                 opportunities = trader.get_opportunities()

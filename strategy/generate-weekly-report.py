@@ -193,27 +193,51 @@ class WeeklyReportV3:
             print(f"⚠️ 保存失败: {e}")
     
     def get_vix_data(self):
-        """获取VIX"""
-        try:
-            ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
-            ret, data = ctx.get_market_snapshot(['US.VIX'])
-            ctx.close()
-            if ret == RET_OK and len(data) > 0:
-                return float(data.iloc[0].get('close', 20))
-        except:
-            pass
+        """获取美股VIX恐慌指数 - 多源备用（与日报一致）"""
+        import requests
+
+        # 多个备用API端点（对齐 daily-report-to-feishu.py）
+        urls = [
+            "https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            "https://query2.finance.yahoo.com/v8/finance/chart/%5EVIX",
+            "https://query1.finance.yahoo.com/v7/finance/chart/%5EVIX",
+        ]
+
+        headers = {'User-Agent': 'Mozilla/5.0'}
+
+        for url in urls:
+            try:
+                resp = requests.get(url, headers=headers, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result = data.get('chart', {}).get('result', [])
+                    if result:
+                        meta = result[0].get('meta', {})
+                        price = meta.get('regularMarketPrice', 0)
+                        if price and price > 0:
+                            print(f"✅ VIX获取成功: {price:.2f}")
+                            return float(price)
+            except Exception as e:
+                print(f"⚠️ VIX API {url} 失败: {e}")
+                continue
+
+        print("⚠️ 所有VIX API失败，使用默认值20.0")
         return 20.0
-    
+
     def get_vhsi_data(self):
-        """获取VHSI"""
+        """获取港股VHSI波幅指数（与日报一致，使用last_price字段）"""
         try:
             ctx = OpenQuoteContext(FUTU_HOST, FUTU_PORT)
             ret, data = ctx.get_market_snapshot(['HK.800125'])
             ctx.close()
             if ret == RET_OK and len(data) > 0:
-                return float(data.iloc[0].get('close', 25))
-        except:
-            pass
+                # 使用last_price字段（对齐日报），失败再尝试close
+                val = data.iloc[0].get('last_price', None)
+                if val is None or val != val:  # nan检查
+                    val = data.iloc[0].get('close', 25)
+                return float(val)
+        except Exception as e:
+            print(f"⚠️ 获取VHSI失败: {e}")
         return 25.0
     
     def calculate_weekly_stats(self):
@@ -329,7 +353,7 @@ class WeeklyReportV3:
         })
         
         # 生成报告
-        acc_names = {15270902: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
+        acc_names = {15270898: '🇺🇸 美股', 15270899: '🇭🇰 港股'}
         
         # 构建LLM风险提示文本
         risk_section = "### 1. 风险评估\n\n"
@@ -400,6 +424,17 @@ class WeeklyReportV3:
 | 平均浮盈 | {hk_stats['avg_pnl_pct']:+.2f}% |
 
 """
+            # 显示持仓明细（与美股对齐）
+            if hk_stats['positions']:
+                report += "**持仓明细：**\n\n"
+                report += "| 标的 | 市值 | 浮盈 |\n"
+                report += "|------|------|------|\n"
+                for p in hk_stats['positions'][:10]:
+                    sym = p.get('symbol', '')
+                    mv = p.get('market_val', 0)
+                    pnl_pct = p.get('pnl_pct', 0)
+                    report += f"| {sym} | ${mv:,.0f} | {pnl_pct:+.2f}% |\n"
+                report += "\n"
         else:
             report += "暂无持仓\n\n"
         

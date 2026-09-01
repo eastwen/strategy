@@ -12,14 +12,14 @@ from datetime import datetime
 from calendar import monthrange
 
 from runtime_config import (
-    DATA_DIR, REPORTS_DIR, STRATEGY_POLICY, format_strategy_policy_compact,
-    format_strategy_policy_markdown, load_api_keys,
+    DATA_DIR, REPORTS_DIR, STRATEGY_DIR, STRATEGY_POLICY,
+    format_strategy_policy_compact, format_strategy_policy_markdown, load_api_keys,
 )
 from futu import OpenQuoteContext
 
 class MonthlyReportV2:
     """月报生成器v2 - 基于v12模板"""
-    
+
     def __init__(self):
         self.load_config()
         self.account_data = {}
@@ -139,7 +139,6 @@ class MonthlyReportV2:
         
         llm_risk = llm_client.get_risk_assessment({
             'pos_pct': position_pct, 'cash_pct': cash_pct,
-            'vix': 20, 'vhsi': 20,
             'total_asset': total_asset,
             'positions': [{'symbol': p['symbol'], 'pnl_pct': p.get('pnl_pct', 0)} for p in self.positions],
             'initial': initial

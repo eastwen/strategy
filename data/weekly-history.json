@@ -73,5 +73,125 @@
       }
     },
     "closed_trades": 12
+  },
+  "2026-07-18": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1218161.856,
+        "cash": 955371.006,
+        "position_value": 262790.85
+      },
+      "15270899": {
+        "total_asset": 993898.103,
+        "cash": 967738.103,
+        "position_value": 26160.0
+      }
+    },
+    "closed_trades": 11
+  },
+  "2026-07-25": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1244845.422,
+        "cash": 127813.602,
+        "position_value": 1117031.82
+      },
+      "15270899": {
+        "total_asset": 995698.103,
+        "cash": 967738.103,
+        "position_value": 27960.0
+      }
+    },
+    "closed_trades": 6
+  },
+  "2026-08-01": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1239453.749,
+        "cash": 250994.849,
+        "position_value": 988458.9
+      },
+      "15270899": {
+        "total_asset": 1006252.33,
+        "cash": 514069.33,
+        "position_value": 492183.0
+      }
+    },
+    "closed_trades": 21
+  },
+  "2026-08-08": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1284232.892,
+        "cash": 146292.812,
+        "position_value": 1137940.08
+      },
+      "15270899": {
+        "total_asset": 999401.716,
+        "cash": 462936.716,
+        "position_value": 536465.0
+      }
+    },
+    "closed_trades": 18
+  },
+  "2026-08-15": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1287429.09,
+        "cash": 130856.02,
+        "position_value": 1156573.07
+      },
+      "15270899": {
+        "total_asset": 990873.21,
+        "cash": 670180.21,
+        "position_value": 320693.0
+      }
+    },
+    "closed_trades": 23
+  },
+  "2026-08-22": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1272222.887,
+        "cash": 126911.517,
+        "position_value": 1145311.37
+      },
+      "15270899": {
+        "total_asset": 1004339.378,
+        "cash": 540599.378,
+        "position_value": 463740.0
+      }
+    },
+    "closed_trades": 17
+  },
+  "2026-08-29": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1231592.25,
+        "cash": 148169.99,
+        "position_value": 1083422.26
+      },
+      "15270899": {
+        "total_asset": 995203.205,
+        "cash": 821243.205,
+        "position_value": 173960.0
+      }
+    },
+    "closed_trades": 23
+  },
+  "2026-08-30": {
+    "accounts": {
+      "15270898": {
+        "total_asset": 1231592.25,
+        "cash": 148169.99,
+        "position_value": 1083422.26
+      },
+      "15270899": {
+        "total_asset": 995203.205,
+        "cash": 821243.205,
+        "position_value": 173960.0
+      }
+    },
+    "closed_trades": 23
   }
 }

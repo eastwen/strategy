@@ -1,0 +1,89 @@
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L151] User: 查到是什么原因了吗？
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L174] Assistant: 查到了，根因已经完全定位。给你完整汇报： --- ## 🎯 结论：不是"新 bug"，是 7/29 重构引入的**排序时序错位** AAPL 跳过 LLM 是**设计使然**（LLM 只对综合分 Top 20 跑，省 token），但 AAPL 这次**本不该被跳过**——它综合分 87 应排第 2 名，却没进 Top 20，这才是异常。 --- ## 🔍 根因：新闻情绪加分发生在 LLM 排名**之后** 关键在 `us-scanner.py` 的执行顺序（第二层）： ``` ① 五源预取（并行算完各股五源评分）
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L174] Assistant: 仅处理评分 Top 10: ['AAPL', 'ABBV', 'AMZN', ...]` —— AAPL 的 `base_score` 81 直接进 Top 10，**每次都跑 LLM**（`🧠 AAPL: 基础66 → LLM最终63`） - **新代码**（7/29 重构后）：改成"五源 + Top 20 + 并行预取 + 新闻情绪加分"，排名改用"原始分×90%+五源×10%"，而加分被排到了排名之后 → 造成这个错位 所以你之前没见过，是因为 7/29 重构把这个时序 bug 带了进来。像 AAPL 这种"涨
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L176] User: 但是按我们股票系统的逻辑不应该不过LLM不能下单吗？
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L180] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L182] User: 但是按我们股票系统的逻辑不应该不过LLM不能下单吗？
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L183] Assistant: 你说得对。让我核实一下系统的实际 LLM 闸门逻辑
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L186] Assistant: 有意思！让我看看 auto-trader 在自己的交易前有没有做独立 LLM 分析。
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L189] Assistant: 发现了关键问题——让我看看这些 `skip_llm=True` 的调用路径
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L192] Assistant: 你说得完全对。让我把整个链条拼出来给你看： ## 系统有两个洞，合起来恰好绕过了 LLM 闸门 **洞 #1 — 扫描器（us-scanner.py L1517）**： 非 Top 20 的股票，`llm_passed = True`，理由是"跳过LLM，直接采用五源评分"。 **洞 #2 — 自动交易器（auto-trader.py）**： 所有买入订单都传 `skip_llm=True` ，**auto-trader 从来不跑自己的 LLM 分析**。它信任扫描器给的 `llm_passed` 字段作为唯一 LLM
+[stock/sessions/stock/2039f317-c2c8-451e-ae32-94c40fc92a23.jsonl#L192] Assistant: |----|------|------| | 扫描器 | `llm_passed=True` 给非 Top 20 | 把"跳过LLM"当成了"LLM通过" | | 扫描器 | 新闻情绪加分在排名之后 | 排名分(79) ≠ 最终分(87) | | 交易器 | `skip_llm=True` 给所有买入 | 永不独立验证，完全信任扫描器 | --- ## 你希望怎么修？ **方案 1（最严格，符合你的"不过LLM不能下单"）**： - 非 Top 20 的股票 `llm_passed = False` → 不给交易 - 
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L5] User: [message_id: om_x100b675953661480b260a84d2c1912c] east: [Replying to: "🧠 *港股策略优化方案* 生成时间: 2026-08-20 17:00 🟢 **HK001** [低优先级] 类别: 例行检查 问题: 策略运行正常 建议: 继续监控市场，定期检查策略表现 请回复 `同意 001` / `同意 002` 等来应用方案"] 这个策略优化建议他是怎么优化？刚刚api模型都用完了，应该给不了方案啊 [System: The content may include
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L6] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L23] Assistant: 查了日志和代码，你的直觉是对的——**今天这条“方案”不是 AI 想出来的，是兜底占位符**。 **实际发生了什么（今天 17:00 的 hk-optimizer 日志）：** 1. LLM 深度分析链路全挂： - `minimax-m2.7` / `hunyuan-role-latest` → HTTP 402，免费试用额度用完 - doubao 系列 5 个模型 → HTTP 400，模型 ID 不存在 - 最后打印 `LLM全部模型调用失败` 2. 脚本里的规则检查（VHSI 情绪、扫描结果数量、RSI 参数边界）
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L24] User: 所以是兜底方案？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L25] Assistant: 对，纯兜底。 今天 17:00 这条 HK001 是代码里写死的占位逻辑：LLM 全挂 + 规则检查没触发 -> `proposals` 为空 -> 自动塞一条“策略运行正常”发出去。它不代表任何真实分析，就是个“今天没东西可说”的占位符。 而且“同意 001”也没有实际作用，没有任何脚本在监听这个回复。 要我把这个兜底行为改掉吗？比如 LLM 失败时明确标注“⚠️ 今日 LLM 不可用，无真实分析”，或者干脆不发。
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L26] User: 那不用管这个了。说回昨天那个AAPL为什么可以跳过LLM下单？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L52] Assistant: AAPL 其实**没有绕过 LLM**——它绕过的是“下单前的第二次 LLM 复核”。验真在扫描器那层已经做过了。完整链路是这样的： **1. 扫描器层（下单前约 30 分钟，8-19 22:xx）** AAPL 在当轮 Top 20 里，LLM 真实分析过： ``` 基础 87 → LLM调整 -2 → 最终 85 理由: 苹果新品泄露/秋季发布会构成催化，机构67%看涨， 但 MACD 仍空头、MA20斜率-1.62%、量能仅0.43x，利好可能已部分计价 ``` 85 分 ≥ 80 门槛，写入 `us-opport
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L52] Assistant: 分股票，可以完全没经过任何 LLM 验真就被 auto-trader 买入。AAPL 那单没事，但这个口子存在。 要不要把这条堵上？比如非 Top20 的高分候选下单前强制走一次 `llm_analysis_before_trade`（就是那个 LLM 挂了会禁单的路径）。
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L53] User: 所以是正常的？但是之前我们不是LLM不能用就不能下单吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L63] Assistant: 对，AAPL 那单**流程上是正常的**--它在扫描器 Top 20 里，下单前 30 分钟被 LLM 真实验真过（87→85，结论“可入”）。你定的“LLM 不能用就不能下单”规则，在它身上是执行了的。 但你的记忆也没错，而且这个问题比我上一条说的**更严重**。规则的实际执行情况分三档： **✅ 第 1 档：Top 20（AAPL 属于这档）** LLM 挂了 / 解析失败 → `passed=False` → auto-trader 跳过。铁律有效。 **❌ 第 2 档：Top 20 以外的高分候选 -- 铁律的洞
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L63] Assistant: 要不要我堵这个洞？改法很直接：auto-trader 买入前检查 `llm_reason` 里是否含“跳过LLM”，是的话强制走一次 `llm_analysis_before_trade`（就是 LLM 挂了会禁单的那条路径）。一行判断的事，今天就能上。
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L65] User: [message_id: om_x100b675929b5fcb0b169d9d974f69f3] east: [Replying to: "✅ 买入成功 标的: US.AAPL 数量: 424股 买入价: ~$318.03 金额: ~$134,843.02 🎯 预测: 止盈价: $351.19 / 止损价: $301.44 📊 评分明细: 总分87 国际资讯: 16/25 (较中性+3.5) · 合并去重资讯 24h 22 项（去重1项，数量不计分） 官方公告: 6/20 (较中性-4.0) · 合并去重公告 2 项（去重0
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L65] User: "ou_e5e299084c8f4c4218a7eb61985c9c92", that mention refers to you.]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L66] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L72] Assistant: 你问到点子上了——**通知是对的，我上一条回答把时间线搞错了，向你更正**。 我引用的那段 LLM 分析（“新品泄露构成催化但量能不足，87→85”）是 **8-20 凌晨 00:52 那轮扫描**做的，发生在下单**之后**。真实时间线是： **8-19 22:xx 扫描轮** - 当轮 Top 20 LLM 名单：`HTHT, WING, DUOL, CRM, NKE, CVNA, MRK, PGR, ACIU, AEAQU, APURR, APYX, BDTX, BNC, BRNS, BRRWW, BUUU, CO
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L72] Assistant: 修复建议（两处一起堵）： 1. **scanner 端**：Top 20 之外，凡 `final_score ≥ 80`（够下单线）的候选强制也走 LLM；顺手把 Top 20 名单按流动性过滤（价格、市值下限） 2. **auto-trader 端**：买入前检查 `llm_reason` 含"跳过LLM"→ 强制走 `llm_analysis_before_trade`，LLM 挂了就禁单——这是铁律的最后一道闸 要我现在改吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L73] User: 修复1就行了，因为不过LLM根本没办法下单的，也没有LLM返回的数据，飞书通知也没显示LLM返回的内容
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L86] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L105] User: 继续完成任务
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L106] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L107] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L110] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L114] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L115] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L118] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L121] User: 完成修复任务了吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L122] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L124] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L126] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L128] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L129] User: 看看日志现在能正常运行吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L130] User: 看看日志股票系统现在能正常运行吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L131] Assistant: ⚠️ Context is too large and auto-compaction could not recover this turn. Try again, use /compact, or use /new to start a fresh session.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L134] User: [message_id: om_x100b6745ec3d70a8b25e9d9d11e6de8] east: hi
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L135] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L147] User: [message_id: om_x100b6745feb680a0b159bb2c1f36484] east: 你现在能收到信息吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L148] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L150] User: 现在股票系统能正常运行吗？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L169] User: Continue the OpenClaw runtime event.
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L170] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L172] User: [message_id: om_x100b67465a4218a0b255546585c572c] east: 什么情况了？
+[stock/sessions/stock/8755afe1-7160-4323-bea0-c13e6b60ace1.jsonl#L173] Assistant: [assistant turn failed before producing content]
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L5] User: 你现在是用什么模型？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L8] Assistant: 当前使用的是 **volcengine-plan/ark-code-latest**（火山引擎 Ark Code），通过 api-key 方式接入。 - 🧠 推理模式：关闭（可用 `/reasoning` 开启） - 📚 上下文：27k / 256k - 🗄️ 缓存命中率：99% 如果想切换模型，随时说一声。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L9] User: 你帮我看看修复完成了吗？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L12] Assistant: 记忆搜索暂时不可用（索引需要重建），我直接看最近的日志和文件来判断。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L21] Assistant: 记忆搜索暂时不可用（索引需要重建），我直接看最近的日志和文件来判断。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L25] User: 就是feishu:g-stock在进行的任务
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L30] Assistant: 会话列表受可见性限制看不到飞书会话，我直接去读那个会话的记录文件。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L40] Assistant: 找到了那个会话的记录。用户在 10:37 说“修复1就行了”，之后 agent 开始动手但多次撞上 "Context is too large" 死掉了。我看看修复到底做了多少。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L52] Assistant: 现在把修复现场核实一下——关键是 `us-scanner.py` 有没有被改过：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L54] Assistant: `us-scanner.py` 没被改过（mtime 还是 7月29）。`auto-trader.py` 有未提交改动但文件时间是 8月18，可能是之前别的修复。确认一下 diff 内容：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L56] Assistant: 确认了：**修复没有完成**。那个 feishu:g-stock 会话在 10:37 接到“修复1”指令后，只做了代码定位（5 次查询 + 8 次读文件），10:48 起就反复撞上 "Context is too large" 死循环，最后一条 11:21 还是失败——**一行代码都没改**。`us-scanner.py` 的修改时间还停在 7月29。 任务内容是明确的：**scanner 端修复——Top 20 之外、`final_score ≥ 80`（够下单线）的候选也要强制走 LLM 验真**，不能“跳过LLM直
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L66] Assistant: 问题定位清楚了，现在动手实现。先确认 `us-scanner.py` 是否已导入 `STRATEGY_POLICY`：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L70] Assistant: 打印顺序调整一下，先打 Top20 再打强制补充名单：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L74] Assistant: 顺手检查港股扫描器是否有同样的洞：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L82] Assistant: 港股扫描器**没有这个洞**--它是所有 ≥70 分候选都走 LLM，没有 Top N 限制，购买力不足时也标记 `llm_passed=False` 禁单。只有美股这边有 Top 20 的洞。现在验证修复逻辑是否完整生效：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L84] Assistant: 测试数据构造错了（AAPL 85 分实际排进了前 20）。重新构造“Top20 被高分票占满、AAPL 85 分排第 21+”的场景：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L86] Assistant: 逻辑验证通过。提交这个修复：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L90] Assistant: 修复**现在才真正完成**。之前那个 feishu:g-stock 会话没做完——18:48 你说“修复1就行了”之后，它只查了代码位置，10:48 起就反复撞上 "Context is too large" 死循环，一行代码都没改就瘫痪了。 我刚在这里接手把活干完了： **问题回顾**（那个会话查清的）：8-19 23:00 AAPL 以 87 分下单 $134,843，但它排在 Top 20 之外（名额被 AEAQU、APURR 这类 $0.2 涡轮股占了），被标记“非Top20，跳过LLM”直接放行——零 LLM 
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L91] User: 看看股票系统现在能正常运行吗？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L98] Assistant: 各组件都在跑，再深挖两点：今晚扫描轮的状态和我下午的修复是否已被实际执行：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L101] Assistant: 系统运行正常，而且**今晚的修复已经实弹生效了**。逐项给你过一遍： **✅ 核心组件全部在线** - **Cron 调度**：23 个任务全部挂载，cron 服务 active - **Futu OpenD**：运行中（7月5日启动至今，累计 CPU 2851 分钟） - **auto-trader**：23:30 那轮刚跑完，在按规则筛票（技术指标 0/8 不满足就跳过） - **新闻管道**：23:31 正在采集（智通财经/SEC EDGAR） - **账户同步**：23:30 同步完成，两个账户 $1,284,
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L101] Assistant: 50）或加流动性过滤。 2. **数据本身没问题**：当前 129 个机会里 ≥75 分有 82 个，COIN、OXY、APA、CF 这些大票都在正常通道里流动。 结论：**能正常运行**，且比修复前更安全了。想让我把强制名单加个上限防 token 爆炸的话，说一声。
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L102] User: 好像早就改了，不是top20才过LLM吧？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L103] Assistant: 我查一下 git 历史，看这个 Top 20 逻辑到底是什么时候引入的：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L112] Assistant: 你的记忆对了一半——**最早的系统确实是所有 ≥70 分候选都过 LLM**，但那个设计在 6 月底就被改掉了。git 历史很清楚： **演进时间线** | 版本 | 日期 | LLM 覆盖范围 | |------|------|--------------| | 17c7092 ~ ae12e54 | 4-09 ~ 6-06 | **所有 ≥70 分候选**全走 LLM（你记忆中的设计） | | 9e132cb | **6-26** | 引入 `TOP_LLM_N = 10`，只有 Top 10 走 LLM | | 
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L112] Assistant: 就是因为额度问题，建议我加个上限或流动性过滤，不然免费额度可能撑不了几天。要改吗？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L113] User: 那我今天不是说了吗？没有LLM怎么下单？那如果超过top20都不过LLM了就问你aapl怎么可以下单的
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L114] Assistant: 对，你说得完全对，这就是你今天在飞书里抓出来的矛盾，而且你的质疑从第一天起就是成立的： **你的铁律**：没有 LLM 验真 → 不能下单。这条规则从来没改过。 **代码实际干的**（7-12 起）：非 Top 20 → 跳过 LLM → `llm_passed=True` → 照样能下单。 这两条是**直接冲突**的。7-12 那次改动把 LLM 砍到 Top 20 时，目的是省 token，但“非 Top 20 直接放行”这个分支等于偷偷把你的铁律改成了“只有 Top 20 需要验真”。注释里写“east 保留：仅
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L115] User: 那不应该top20以外的不应该直接不能下单吗？为什么还要强制过LLM？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L119] Assistant: 问得好，这正是两条路线的分叉点。直接禁单当然成立，而且更省 token--但当时没这么做，是因为**Top 20 名单本身是坏的**。看今晚 23:00 轮的实际名单： ``` Top 20: BTDR, BULL, ADVB, AEAQU, AFJKR, AMCI, ARBK, ATGL, BANL, BGL, BLZRW, BULLW, CAPNR, CDTG, CNCK, COLAR, DMIIR, EEIQ, ENRD, FBGL ``` 一半是 $0.2~$2 的涡轮/壳股（第一层动量评分对妖股天然友好，涨 
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L119] Assistant: 名单外直接禁单**：省钱、名单干净、逻辑最硬，代价是要再改一处 我推荐 B。要上吗？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L120] User: 我不需要你改什么东西啊，你就保证top20过LLM，top20以外的不过LLM不就不能下单了吗？
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L121] Assistant: 你说得对，这确实是最简单直接的方案。撤掉我那个“强制验真”（烧 token），改成**Top 20 以外未过 LLM = 直接禁单**。动手：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L129] Assistant: 现在撤掉我下午加的“强制验真名单”（那个烧 token 的方案），回到纯 Top 20：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L135] Assistant: 顺序看起来有点怪，检查一下完整区域：
+[stock/sessions/stock/91b23e83-ecc8-48b9-80ce-ec531ffdbcbd.jsonl#L137] Assistant: 结构正确。提交并验证完整链路：

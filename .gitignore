@@ -34,3 +34,12 @@ strategy/.api-keys.json
 strategy/.qoder/
 strategy/venv.bak/
 strategy/__pycache__/
+
+# API keys 备份 / 临时备份（含真实密钥，勿提交）
+strategy/.api-keys.json.bak
+strategy/auto-trader.py.orig
+strategy/*.orig
+*.bak
+
+# 运行时缓存（勿提交）
+runtime/

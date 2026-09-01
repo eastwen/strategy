@@ -1,12 +1,21 @@
 {
-  "timestamp": "2026-07-11T05:00:07.373271",
+  "timestamp": "2026-09-01T05:00:09.848577",
   "proposals": [
     {
+      "type": "vix",
+      "issue": "VIX=14.9，市场平静",
+      "suggestion": "可以放宽条件，提高仓位到15%",
+      "priority": "低",
       "id": "US001",
-      "category": "例行检查",
-      "issue": "策略运行正常",
-      "suggestion": "继续监控，定期检查技术指标",
-      "priority": "低"
+      "category": "市场环境"
+    },
+    {
+      "type": "llm_analysis",
+      "issue": "RSI与成交量参数缺失导致策略无法执行",
+      "suggestion": "补充RSI(如14日)及成交量阈值以激活信号筛选",
+      "priority": "高",
+      "id": "US002",
+      "category": "LLM深度分析"
     }
   ]
 }

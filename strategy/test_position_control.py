@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,6 +182,8 @@ class PositionControlTest(unittest.TestCase):
         scanner.news_sentiment = {}
         scanner.sp500 = []
         scanner.nasdaq = []
+        scanner._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
+        scanner._drop_stats_lock = threading.Lock()
         scanner.calculate_score = lambda *args: 64
         self.assertIsNone(
             scanner._build_quote_candidate('TEST', 100, 99, 1, 'test')

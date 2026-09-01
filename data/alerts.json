@@ -1,150 +1,168 @@
 {
-  "time": "2026-07-12T21:45:26.955488",
+  "time": "2026-09-01T23:09:55.649384",
   "source": "news_integration",
   "alerts": [
     {
-      "symbol": "NVDA",
-      "title": "Nvidia's Forward P/E Has Actually Fallen as Its Stock Price Rose. Here's How That's Possible.",
-      "source": "Yahoo Finance",
-      "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:02.184441",
+      "symbol": "ARM",
+      "title": "When someone talks down to you, use Dolly Parton's simple trick to 'maintain your dignity and disarm' them, says expert",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-08-31T21:34:01",
       "importance": "高",
-      "alert_type": "重大利好"
-    },
-    {
-      "symbol": "TGT",
-      "title": "US says it struck 140 Iranian military targets Saturday - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-12T12:26:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "TGT",
-      "title": "Trump says missiles aimed at Iran if Tehran targets US president - Reuters",
-      "source": "Finnhub",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-11T11:35:00",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "WDC",
-      "title": "Why Western Digital (NASDAQ:WDC) Is Benefiting From AI-Driven Storage Demand and Tight HDD Supply Conditions",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:02.181275",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "NVDA",
-      "title": "Dow Jones Futures Loom Amid New U.S.-Iran Attacks; Nvidia, Micron, Sandisk Near Buy Points",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:02.181686",
-      "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "MU",
-      "title": "Dow Jones Futures Loom Amid New U.S.-Iran Attacks; Nvidia, Micron, Sandisk Near Buy Points",
-      "source": "Yahoo Finance",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:02.181686",
-      "importance": "中",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "TSM",
-      "title": "Great Tech Stocks to Buy Before Q2 Earnings and Hold: AI Chip Maker TSMC - Yahoo Finance",
+      "title": "Social Buzz: Wallstreetbets Stocks Decline Premarket Tuesday; Sandisk, Micron Technology to Open Lower - marketscreener.com",
       "source": "Google News Tech",
-      "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:05.037693",
-      "importance": "中",
+      "sentiment": 0.0,
+      "timestamp": "2026-09-01T23:09:08.874164",
+      "importance": "高",
       "alert_type": "新闻"
     },
     {
       "symbol": "MU",
-      "title": "Is Now the Ultimate Entry Point for Micron Technology Stock? - The Globe and Mail",
+      "title": "Micron shares fall 1.8% following Taiwan incentive pay report - finance.yahoo.com",
       "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-09-01T23:09:08.874858",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "GE",
+      "title": "Lilly taps obesity windfall for more M&A. Plus, Elon Musk remarks pull GE Vernova lower",
+      "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:05.038705",
+      "timestamp": "2026-09-01T02:27:11",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
-      "symbol": "AMD",
-      "title": "美股三大指数继续收涨，SK海力士ADR上市首日涨超12%，脸书涨5.97%，英伟达涨4.03%，AMD涨2.04%，SpaceX跌4.51%",
-      "source": "东方财富",
+      "symbol": "NVDA",
+      "title": "Why Nvidia and CrowdStrike are up in an otherwise down stock market",
+      "source": "Finnhub",
       "sentiment": 0.5,
-      "timestamp": "2026-07-12T21:45:15.509107",
+      "timestamp": "2026-09-01T00:38:01",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "GOOGL",
+      "title": "Alphabet (GOOG) Reports Strong Growth Fueled by AI Demand and Cloud Revenue",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-09-01T23:09:03.446114",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "GOOG",
+      "title": "Alphabet (GOOG) Reports Strong Growth Fueled by AI Demand and Cloud Revenue",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-09-01T23:09:03.446114",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "CRM",
+      "title": "Agentforce: Scaling the Next Generation of Salesforce (CRM)",
+      "source": "Yahoo Finance",
+      "sentiment": 0.5,
+      "timestamp": "2026-09-01T23:09:03.446929",
       "importance": "中",
       "alert_type": "新闻"
     },
     {
       "symbol": "",
-      "title": "India, NZ plan strategic partnership including Maritime Security",
+      "title": "Mortgage rates surge to the highest since June 2025 as new Middle East attacks push oil prices up",
       "source": "Finnhub",
       "sentiment": 1.0,
-      "timestamp": "2026-07-11T12:07:30",
+      "timestamp": "2026-09-01T01:56:01",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "I'm Calling It. It's Time to Load Up on These 3 High-Yielding Dividend Stocks Right Now (1 Currently Yields Over 8.5%)",
+      "title": "We're trimming one of our top-performing tech stocks to lock in some gains",
+      "source": "Finnhub",
+      "sentiment": 1.0,
+      "timestamp": "2026-08-31T23:23:01",
+      "importance": "高",
+      "alert_type": "重大利好"
+    },
+    {
+      "symbol": "",
+      "title": "EU aviation safety agency narrows Gulf airspace warning - Reuters",
+      "source": "Finnhub",
+      "sentiment": 0.0,
+      "timestamp": "2026-08-31T20:41:30",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Why you should care about rising bond yields",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:02.183109",
+      "timestamp": "2026-09-01T23:09:03.445760",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "1 Vanguard Index Fund to Buy Before It Soars in 2026, According to a Wall Street Analyst",
+      "title": "Can These 4 Strong ETF Areas of August Gain in September?",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:02.183507",
+      "timestamp": "2026-09-01T23:09:03.446444",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Technology: Stocks Surged During the Second Quarter - Morningstar",
-      "source": "Google News Tech",
+      "title": "Blue Dolphin Stock Rises as Refining Margins Drive Q2 Earnings",
+      "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:05.036275",
+      "timestamp": "2026-09-01T23:09:03.448903",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "Stock Market Today, July 9: AI Chip, Technology Stocks Rally, Overcoming Ceasefire Worries - The Motley Fool",
+      "title": "SMID Q2 Earnings Drop Y/Y on Tough Barrier Project Comparison",
+      "source": "Yahoo Finance",
+      "sentiment": 0.0,
+      "timestamp": "2026-09-01T23:09:03.449501",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Sector Update: Tech Stocks Fall Premarket Tuesday - Moomoo",
+      "source": "Google News Tech",
+      "sentiment": 0.0,
+      "timestamp": "2026-09-01T23:09:08.872030",
+      "importance": "高",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "",
+      "title": "Why foreign inflows into China A shares could slow after record surge - South China Morning Post",
       "source": "Google News Tech",
       "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:05.036594",
+      "timestamp": "2026-09-01T23:09:08.872807",
       "importance": "高",
       "alert_type": "重大利好"
     },
     {
       "symbol": "",
-      "title": "A record number of tech stock insiders are buying their own shares in 2026 - Yahoo Finance",
+      "title": "3 Stocks to Sell and 3 Stocks to Buy for September - Morningstar",
       "source": "Google News Tech",
-      "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:05.037370",
+      "sentiment": 0.0,
+      "timestamp": "2026-09-01T23:09:08.874592",
       "importance": "高",
-      "alert_type": "重大利好"
-    },
-    {
-      "symbol": "",
-      "title": "Stock Market Today, July 9: AI Chip, Technology Stocks Rally, Overcoming Ceasefire Worries - Yahoo Finance",
-      "source": "Google News Tech",
-      "sentiment": 1.0,
-      "timestamp": "2026-07-12T21:45:05.038061",
-      "importance": "高",
-      "alert_type": "重大利好"
+      "alert_type": "新闻"
     }
   ]
 }
