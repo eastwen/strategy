@@ -1,14 +1,14 @@
 {
   "source": "futu_simulate",
-  "sync_time": "2026-09-01T23:10:04.022453",
+  "sync_time": "2026-09-01T23:30:07.172049",
   "accounts": [
     {
       "acc_id": 15270898,
       "acc_type": "MARGIN",
-      "total_assets": 1200026.238,
-      "cash": 247341.599,
-      "market_val": 952684.639,
-      "securities_assets": 1200026.238
+      "total_assets": 1201051.151,
+      "cash": 361236.231,
+      "market_val": 839814.92,
+      "securities_assets": 1201051.151
     },
     {
       "acc_id": 15270899,
@@ -22,67 +22,59 @@
   "positions": [
     {
       "acc_id": 15270898,
-      "symbol": "US.V",
-      "shares": 343,
-      "cost_price": 382.15,
-      "market_val": 130460.05,
-      "pl_ratio": -0.4710192332853592
-    },
-    {
-      "acc_id": 15270898,
-      "symbol": "US.ATOS",
-      "shares": 48573,
-      "cost_price": 2.62,
-      "market_val": 120461.04,
-      "pl_ratio": -5.343511450381679
-    },
-    {
-      "acc_id": 15270898,
-      "symbol": "US.CRWD",
-      "shares": 372,
-      "cost_price": 225.95,
-      "market_val": 80510.1,
-      "pl_ratio": -4.215534410267758
+      "symbol": "US.DUOL",
+      "shares": 881,
+      "cost_price": 157.725,
+      "market_val": 138255.33,
+      "pl_ratio": -0.5040418449833571
     },
     {
       "acc_id": 15270898,
       "symbol": "US.WAY",
       "shares": 3209,
       "cost_price": 26.43,
-      "market_val": 84107.89,
-      "pl_ratio": -0.8323874385168369
+      "market_val": 84139.98,
+      "pl_ratio": -0.7945516458569807
     },
     {
       "acc_id": 15270898,
       "symbol": "US.NOW",
       "shares": 889,
       "cost_price": 143.93,
-      "market_val": 129313.94,
-      "pl_ratio": 1.0630167442506773
+      "market_val": 127180.34,
+      "pl_ratio": -0.6044605016327381
     },
     {
       "acc_id": 15270898,
       "symbol": "US.AVGO",
       "shares": 414,
       "cost_price": 369.42999999999995,
-      "market_val": 150830.55,
-      "pl_ratio": -1.3818585388300897
+      "market_val": 152491.104,
+      "pl_ratio": -0.29613187884037573
     },
     {
       "acc_id": 15270898,
       "symbol": "US.MO",
       "shares": 1827,
       "cost_price": 68.182,
-      "market_val": 128328.48,
-      "pl_ratio": 3.018391950954797
+      "market_val": 128628.108,
+      "pl_ratio": 3.2589246428676186
     },
     {
       "acc_id": 15270898,
-      "symbol": "US.DUOL",
-      "shares": 881,
-      "cost_price": 157.725,
-      "market_val": 138955.725,
-      "pl_ratio": 0.0
+      "symbol": "US.V",
+      "shares": 343,
+      "cost_price": 382.15,
+      "market_val": 129208.1,
+      "pl_ratio": -1.4261415674473377
+    },
+    {
+      "acc_id": 15270898,
+      "symbol": "US.CRWD",
+      "shares": 372,
+      "cost_price": 225.95,
+      "market_val": 79714.02,
+      "pl_ratio": -5.1626466032308045
     },
     {
       "acc_id": 15270899,

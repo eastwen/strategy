@@ -4003,5 +4003,30 @@
     ],
     "order_id": "8016378",
     "data_source": "futu_filled_order"
+  },
+  {
+    "symbol": "US.ATOS",
+    "side": "SELL",
+    "shares": 48573,
+    "entry_price": 2.62,
+    "exit_price": 2.3449999999999998,
+    "pnl": -13357.575000000017,
+    "pnl_pct": -10.496183206106883,
+    "reason": "趋势性下跌触发全平(-6%兜底)",
+    "stop_type": null,
+    "market": "us",
+    "entry_score": 86,
+    "close_time": "2026-09-01T23:30:41.735502",
+    "llm_review": "🤖 趋势性下跌触发全平(-6%兜底)\n📌 ...\n🔍 ...\n💡 ...",
+    "entry_reasons": [
+      "评分86分",
+      "✅ MA20>MA50上升趋势 (MA20=2.43, MA50=2.30)",
+      "⚠️ RSI=65.1≥65，不建议入场",
+      "⚠️ 成交量仅0.9倍，不足1.8倍",
+      "✅ MACD无死叉",
+      "✅ 评分86需满足2项技术条件，当前满足2项"
+    ],
+    "order_id": "8016808",
+    "data_source": "futu_filled_order"
   }
 ]

@@ -1,5 +1,5 @@
 {
-  "time": "2026-09-01T23:09:55.649384",
+  "time": "2026-09-01T23:35:04.268475",
   "source": "news_integration",
   "alerts": [
     {
@@ -8,24 +8,6 @@
       "source": "Finnhub",
       "sentiment": 0.0,
       "timestamp": "2026-08-31T21:34:01",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "MU",
-      "title": "Social Buzz: Wallstreetbets Stocks Decline Premarket Tuesday; Sandisk, Micron Technology to Open Lower - marketscreener.com",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-09-01T23:09:08.874164",
-      "importance": "高",
-      "alert_type": "新闻"
-    },
-    {
-      "symbol": "MU",
-      "title": "Micron shares fall 1.8% following Taiwan incentive pay report - finance.yahoo.com",
-      "source": "Google News Tech",
-      "sentiment": 0.0,
-      "timestamp": "2026-09-01T23:09:08.874858",
       "importance": "高",
       "alert_type": "新闻"
     },
@@ -52,7 +34,7 @@
       "title": "Alphabet (GOOG) Reports Strong Growth Fueled by AI Demand and Cloud Revenue",
       "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-09-01T23:09:03.446114",
+      "timestamp": "2026-09-01T23:34:02.598593",
       "importance": "中",
       "alert_type": "新闻"
     },
@@ -61,7 +43,7 @@
       "title": "Alphabet (GOOG) Reports Strong Growth Fueled by AI Demand and Cloud Revenue",
       "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-09-01T23:09:03.446114",
+      "timestamp": "2026-09-01T23:34:02.598593",
       "importance": "中",
       "alert_type": "新闻"
     },
@@ -70,7 +52,16 @@
       "title": "Agentforce: Scaling the Next Generation of Salesforce (CRM)",
       "source": "Yahoo Finance",
       "sentiment": 0.5,
-      "timestamp": "2026-09-01T23:09:03.446929",
+      "timestamp": "2026-09-01T23:34:02.599423",
+      "importance": "中",
+      "alert_type": "新闻"
+    },
+    {
+      "symbol": "MU",
+      "title": "Micron Stock Flashing Intriguing 'Buy the Dip' Signal - finance.yahoo.com",
+      "source": "Google News Tech",
+      "sentiment": 0.5,
+      "timestamp": "2026-09-01T23:34:04.992574",
       "importance": "中",
       "alert_type": "新闻"
     },
@@ -106,7 +97,16 @@
       "title": "Why you should care about rising bond yields",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-09-01T23:09:03.445760",
+      "timestamp": "2026-09-01T23:34:02.597872",
+      "importance": "高",
+      "alert_type": "重大利好"
+    },
+    {
+      "symbol": "",
+      "title": "Stock Market Today: Nasdaq Sinks As Crude Prices Climb; These Oil Names Breakout (Live Coverage)",
+      "source": "Yahoo Finance",
+      "sentiment": 1.0,
+      "timestamp": "2026-09-01T23:34:02.598200",
       "importance": "高",
       "alert_type": "重大利好"
     },
@@ -115,7 +115,7 @@
       "title": "Can These 4 Strong ETF Areas of August Gain in September?",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-09-01T23:09:03.446444",
+      "timestamp": "2026-09-01T23:34:02.599134",
       "importance": "高",
       "alert_type": "重大利好"
     },
@@ -124,7 +124,7 @@
       "title": "Blue Dolphin Stock Rises as Refining Margins Drive Q2 Earnings",
       "source": "Yahoo Finance",
       "sentiment": 1.0,
-      "timestamp": "2026-09-01T23:09:03.448903",
+      "timestamp": "2026-09-01T23:34:02.601139",
       "importance": "高",
       "alert_type": "重大利好"
     },
@@ -133,7 +133,7 @@
       "title": "SMID Q2 Earnings Drop Y/Y on Tough Barrier Project Comparison",
       "source": "Yahoo Finance",
       "sentiment": 0.0,
-      "timestamp": "2026-09-01T23:09:03.449501",
+      "timestamp": "2026-09-01T23:34:02.601705",
       "importance": "高",
       "alert_type": "新闻"
     },
@@ -142,25 +142,16 @@
       "title": "Sector Update: Tech Stocks Fall Premarket Tuesday - Moomoo",
       "source": "Google News Tech",
       "sentiment": 0.0,
-      "timestamp": "2026-09-01T23:09:08.872030",
+      "timestamp": "2026-09-01T23:34:04.982046",
       "importance": "高",
       "alert_type": "新闻"
-    },
-    {
-      "symbol": "",
-      "title": "Why foreign inflows into China A shares could slow after record surge - South China Morning Post",
-      "source": "Google News Tech",
-      "sentiment": 1.0,
-      "timestamp": "2026-09-01T23:09:08.872807",
-      "importance": "高",
-      "alert_type": "重大利好"
     },
     {
       "symbol": "",
       "title": "3 Stocks to Sell and 3 Stocks to Buy for September - Morningstar",
       "source": "Google News Tech",
       "sentiment": 0.0,
-      "timestamp": "2026-09-01T23:09:08.874592",
+      "timestamp": "2026-09-01T23:34:04.990838",
       "importance": "高",
       "alert_type": "新闻"
     }

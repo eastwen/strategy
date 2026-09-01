@@ -1007,8 +1007,10 @@ class AutoTrader:
                         'shares': shares,
                         'cost_price': getattr(p, 'cost_price', 0),
                         'market_val': getattr(p, 'market_val', 0),
-                        'pl_ratio': float(getattr(p, 'pl_ratio', 0))
+                        'pl_ratio': float(getattr(p, 'pl_ratio', 0)),
+                        'price_source': 'position_cache',
                     })
+                self._refresh_positions_with_live_quotes(positions)
                 print(f"  📈 {market.upper()}持仓: {len(positions)}只")
             else:
                 print(f"  📈 {market.upper()}持仓: 0只")
@@ -1036,6 +1038,53 @@ class AutoTrader:
             traceback.print_exc()
 
         return None
+
+    def _refresh_positions_with_live_quotes(self, positions):
+        """Replace delayed simulated-position valuations with batch live quotes.
+
+        Futu's simulated position_list_query can keep market_val/pl_ratio stale for
+        a long time. Shares and cost still come from the trade API, while stop-loss
+        decisions must use quote snapshots. Missing quotes fail back to position data.
+        """
+        if not positions or self.quote_ctx is None:
+            return positions
+        codes = [str(pos.get('symbol') or '') for pos in positions if pos.get('symbol')]
+        if not codes:
+            return positions
+        try:
+            ret, snapshots = self.quote_ctx.get_market_snapshot(codes)
+            if ret != RET_OK or snapshots is None or len(snapshots) == 0:
+                print(f"  ⚠️ 实时持仓行情获取失败，回退富途持仓缓存: {snapshots}")
+                return positions
+            quote_map = {
+                str(row.code): row for row in snapshots.itertuples()
+                if float(getattr(row, 'last_price', 0) or 0) > 0
+            }
+            for pos in positions:
+                row = quote_map.get(str(pos.get('symbol') or ''))
+                if row is None:
+                    continue
+                live_price = float(getattr(row, 'last_price', 0) or 0)
+                shares = float(pos.get('shares', 0) or 0)
+                cost = float(pos.get('cost_price', 0) or 0)
+                cached_val = float(pos.get('market_val', 0) or 0)
+                cached_price = cached_val / shares if shares > 0 else 0
+                if cached_price > 0:
+                    deviation = abs(live_price - cached_price) / cached_price * 100
+                    if deviation >= 0.5:
+                        print(
+                            f"  🚨 {pos['symbol']}: 富途持仓价${cached_price:.4f}滞后实时价"
+                            f"${live_price:.4f} ({deviation:.2f}%)，风控改用实时价"
+                        )
+                pos['current_price'] = live_price
+                pos['market_val'] = live_price * shares
+                if cost > 0:
+                    pos['pl_ratio'] = (live_price - cost) / cost * 100
+                pos['price_source'] = 'futu_snapshot'
+                pos['quote_update_time'] = str(getattr(row, 'update_time', '') or '')
+        except Exception as e:
+            print(f"  ⚠️ 实时持仓行情异常({e})，回退富途持仓缓存")
+        return positions
 
     def get_opportunities(self):
         """获取交易机会（拒绝使用过期机会文件，避免旧信号触发通知/交易）"""
@@ -2270,7 +2319,10 @@ class AutoTrader:
         return f"US.{sym}"
 
     def get_position_price(self, pos):
-        """根据持仓市值估算当前价格。"""
+        """Return live snapshot price, falling back to position valuation."""
+        current_price = float(pos.get('current_price', 0) or 0)
+        if current_price > 0:
+            return current_price
         shares = int(pos.get('shares', 0) or 0)
         market_val = float(pos.get('market_val', 0) or 0)
         return market_val / shares if shares > 0 else 0
