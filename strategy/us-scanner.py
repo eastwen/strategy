@@ -9,11 +9,13 @@
 import sys
 import os
 import json
+import math
 import time
 import threading
 import requests
 from datetime import datetime, date, time as dt_time
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from statistics import median
 
 from runtime_config import (
     DATA_DIR,
@@ -33,10 +35,13 @@ from runtime_config import (
 # 仅第一层达到该分数的标的进入耗时的五源第二层；最终交易线仍由策略配置控制。
 LAYER2_CANDIDATE_MIN_SCORE = 65
 
-# 仅当20日均成交量和日均成交额同时很低时剔除，避免误伤高价低股数股票。
-MIN_LAYER1_AVG_VOLUME = 300_000
-MIN_LAYER1_AVG_DOLLAR_VOLUME = 5_000_000
+# 第一层历史流动性闸门。数量本身不作为单独通行条件，避免高价股因股数少被误伤。
+MIN_LAYER1_ACTIVE_SESSIONS = 15
+MIN_LAYER1_MEDIAN_DOLLAR_VOLUME = 2_000_000
+MIN_LAYER1_TRIMMED_AVG_DOLLAR_VOLUME = 5_000_000
 _AVG_VOLUME_WINDOW_DAYS = 20
+_LIQUIDITY_TRIM_RATIO = 0.10
+_LIQUIDITY_CACHE_VERSION = 2
 _LIQUIDITY_CACHE_PATH = RUNTIME_DIR / 'us-layer1-liquidity-cache.json'
 
 
@@ -670,28 +675,56 @@ class USScanner:
 
     @staticmethod
     def _liquidity_metrics(closes, volumes, source):
-        """用最近20个已完成交易日计算日均量和日均成交额。"""
+        """用完整交易日计算稳健流动性，避免单日异常放量抬高均值。"""
         pairs = []
         for close, volume in zip(closes, volumes):
+            if close is None or volume is None:
+                continue
             try:
-                close = float(close or 0)
-                volume = float(volume or 0)
+                close = float(close)
+                volume = float(volume)
             except (TypeError, ValueError):
                 continue
-            if close > 0 and volume > 0:
+            # 零成交量是流动性事实，不能像旧逻辑一样从样本中删除。
+            if math.isfinite(close) and math.isfinite(volume) and close > 0 and volume >= 0:
                 pairs.append((close, volume))
         pairs = pairs[-_AVG_VOLUME_WINDOW_DAYS:]
         if len(pairs) < 5:
             return None
-        avg_volume = sum(volume for _, volume in pairs) / len(pairs)
-        avg_dollar_volume = sum(close * volume for close, volume in pairs) / len(pairs)
+
+        volumes_only = [volume for _, volume in pairs]
+        dollar_volumes = [close * volume for close, volume in pairs]
+        active_sessions = sum(1 for volume in volumes_only if volume > 0)
+        avg_volume = sum(volumes_only) / len(volumes_only)
+        avg_dollar_volume = sum(dollar_volumes) / len(dollar_volumes)
+
+        trim_count = int(len(pairs) * _LIQUIDITY_TRIM_RATIO)
+
+        def _trimmed_average(values):
+            ordered = sorted(values)
+            trimmed = ordered[trim_count:-trim_count] if trim_count else ordered
+            return sum(trimmed) / len(trimmed)
+
+        median_volume = median(volumes_only)
+        median_dollar_volume = median(dollar_volumes)
+        trimmed_avg_volume = _trimmed_average(volumes_only)
+        trimmed_avg_dollar_volume = _trimmed_average(dollar_volumes)
+        passed = (
+            active_sessions >= MIN_LAYER1_ACTIVE_SESSIONS
+            and (
+                median_dollar_volume >= MIN_LAYER1_MEDIAN_DOLLAR_VOLUME
+                or trimmed_avg_dollar_volume >= MIN_LAYER1_TRIMMED_AVG_DOLLAR_VOLUME
+            )
+        )
         return {
             'avg_volume': round(avg_volume, 2),
             'avg_dollar_volume': round(avg_dollar_volume, 2),
-            'passed': not (
-                avg_volume < MIN_LAYER1_AVG_VOLUME
-                and avg_dollar_volume < MIN_LAYER1_AVG_DOLLAR_VOLUME
-            ),
+            'median_volume': round(median_volume, 2),
+            'median_dollar_volume': round(median_dollar_volume, 2),
+            'trimmed_avg_volume': round(trimmed_avg_volume, 2),
+            'trimmed_avg_dollar_volume': round(trimmed_avg_dollar_volume, 2),
+            'active_sessions': active_sessions,
+            'passed': passed,
             'source': source,
             'sessions': len(pairs),
         }
@@ -699,7 +732,10 @@ class USScanner:
     def _load_daily_liquidity_cache(self):
         try:
             payload = json.loads(_LIQUIDITY_CACHE_PATH.read_text(encoding='utf-8'))
-            if payload.get('date') == current_us_market_date().isoformat():
+            if (
+                payload.get('date') == current_us_market_date().isoformat()
+                and payload.get('version') == _LIQUIDITY_CACHE_VERSION
+            ):
                 entries = payload.get('entries', {})
                 return entries if isinstance(entries, dict) else {}
         except Exception:
@@ -711,7 +747,11 @@ class USScanner:
             RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
             tmp_path = _LIQUIDITY_CACHE_PATH.with_suffix('.tmp')
             tmp_path.write_text(
-                json.dumps({'date': current_us_market_date().isoformat(), 'entries': entries}, ensure_ascii=False),
+                json.dumps({
+                    'date': current_us_market_date().isoformat(),
+                    'version': _LIQUIDITY_CACHE_VERSION,
+                    'entries': entries,
+                }, ensure_ascii=False),
                 encoding='utf-8',
             )
             os.replace(tmp_path, _LIQUIDITY_CACHE_PATH)
@@ -862,8 +902,11 @@ class USScanner:
         self._layer1_drop_stats['liquidity_dropped'] = len(dropped)
         for symbol, metrics in dropped:
             print(
-                f"      💧 {symbol} 双低流动性剔除: 20日均量{metrics['avg_volume']:,.0f}股, "
-                f"日均成交额${metrics['avg_dollar_volume']:,.0f} ({metrics.get('source', 'unknown')})"
+                f"      💧 {symbol} 第一层流动性剔除: 活跃日"
+                f"{metrics.get('active_sessions', 0)}/{metrics.get('sessions', 0)}, "
+                f"中位成交额${metrics.get('median_dollar_volume', 0):,.0f}, "
+                f"去极值日均${metrics.get('trimmed_avg_dollar_volume', 0):,.0f} "
+                f"({metrics.get('source', 'unknown')})"
             )
         print(
             f"   💧 统一流动性过滤: 候选{len(candidates)}只 → 保留{len(kept)}只, "
@@ -1484,7 +1527,7 @@ class USScanner:
         skip_llm = buying_power < min_position
 
         # 🎯 五源补算覆盖候选池；LLM 在五源评分完成后再处理真实评分 Top 20
-        TOP_LLM_N = 20
+        TOP_LLM_N = 50
         if not skip_llm:
             print(f"   🧠 LLM 将在五源评分后处理真实评分 Top {TOP_LLM_N}")
 

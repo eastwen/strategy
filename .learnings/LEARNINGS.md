@@ -45,3 +45,16 @@ sync-futu-account.py使用相对路径导致cron执行失败
 **相关文件**:
 - strategy/sync-futu-account.py
 
+## 2026-09-03 美股流动性限制应在第一层统一执行
+
+**类别**: correction
+
+**发生了什么**:
+排查低流动性股票 ADXN 后，一度考虑把流动性限制继续传入自动下单仓位。用户明确要求改为在第一层直接过滤。
+
+**应该怎么做**:
+把历史流动性作为候选资格，在所有第一层备用行情路径汇总后、五源第二层之前统一过滤；不要在自动交易器重复增加同一套限制。
+
+**相关文件**:
+- strategy/us-scanner.py
+- strategy/test_us_liquidity_filter.py

@@ -1,19 +1,19 @@
 {
-  "timestamp": "2026-09-01T05:00:09.848577",
+  "timestamp": "2026-09-11T05:00:09.256655",
   "proposals": [
     {
-      "type": "vix",
-      "issue": "VIX=14.9，市场平静",
-      "suggestion": "可以放宽条件，提高仓位到15%",
-      "priority": "低",
+      "type": "llm_analysis",
+      "issue": "问题：策略核心参数未配置，无法生成有效信号。",
+      "suggestion": "建议：立即设定RSI超卖/超买阈值（如30/70）及成交量倍数（如≥1.5倍20日均量），并回测历史数据校准。",
+      "priority": "高",
       "id": "US001",
-      "category": "市场环境"
+      "category": "LLM深度分析"
     },
     {
       "type": "llm_analysis",
-      "issue": "RSI与成交量参数缺失导致策略无法执行",
-      "suggestion": "补充RSI(如14日)及成交量阈值以激活信号筛选",
-      "priority": "高",
+      "issue": "问题：候选机会为0，表明筛选逻辑未激活或数据源异常。",
+      "suggestion": "建议：检查数据管道连通性，验证标的池覆盖范围（建议覆盖标普500成分股），并增加行业/市值过滤条件缩小范围。",
+      "priority": "中",
       "id": "US002",
       "category": "LLM深度分析"
     }

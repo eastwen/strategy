@@ -36,6 +36,15 @@ from futu import OpenQuoteContext, RET_OK
 
 LAYER2_CANDIDATE_MIN_SCORE = 65
 
+# 港股量能闸门（对齐美股流动性闸门意图，数值按港股市场口径调整）
+# 判据：kline_volume_ratio = 当天累计成交量 / 20日均量（Futu K线可得）
+# 港股低价迷你股多、日内累计量天然偏低，阈值比美股(极端无量0.009)放宽两档：
+#   ratio < 0.3  → 无量假冲高，一票否决，压到候选线以下（不进入五源/交易）
+#   0.3 ≤ r < 0.5 → 量能明显不足，降10分（仅观察，不直接禁）
+HK_VOLUME_GATE_SEVERE = 0.3    # 低于此值视为「无量」→ 禁入交易候选
+HK_VOLUME_GATE_WARN = 0.5      # 低于此值视为「量能不足」→ 降10分观察
+HK_VOLUME_GATE_WARN_PENALTY = 10      # 量能不足惩罚分
+
 def combine_layer_scores(first_layer_score, five_source_score):
     """第一层主导总分，港股五源只提供10%的深度校验权重。"""
     first = float(first_layer_score or 0)
@@ -924,6 +933,38 @@ class HKScanner:
                 print(f"   ⚠️ 批量获取失败: {e}")
         
         print(f"\n   获取了 {real_tech_count} 只股票的真实技术指标")
+
+        # 港股量能闸门：真实技术回填后、进入五源层前，对无量/量能不足的候选降分。
+        # 对齐美股流动性闸门对“低量假冲高”的拦截意图，数值按港股市场口径放宽。
+        for candidate in results:
+            vol_ratio = candidate.get('kline_volume_ratio')
+            candidates_prev_score = candidate.get('base_score', candidate.get('score', 0))
+            if vol_ratio is None:
+                # 拿不到真实量能：交易不可靠，压制到候选线以下，避免无依据下单
+                candidate['base_score'] = min(candidates_prev_score, LAYER2_CANDIDATE_MIN_SCORE - 5)
+                candidate['score'] = candidate['base_score']
+                candidate['volume_gate'] = 'no_data'
+                print(f"   💧 {candidate.get('symbol')}: 无真实量能数据，压到候选线以下 {candidate['base_score']}")
+                continue
+            if vol_ratio < HK_VOLUME_GATE_SEVERE:
+                # 无量：一票否决，直接压到候选线以下，不再进入五源/交易候选
+                candidate['base_score'] = min(candidates_prev_score, LAYER2_CANDIDATE_MIN_SCORE - 5)
+                candidate['score'] = candidate['base_score']
+                candidate['volume_gate'] = (f"无量({vol_ratio:.3f}×<{HK_VOLUME_GATE_SEVERE})，"
+                                            f"一票否决压到候选线以下")
+                print(f"   💧 {candidate.get('symbol')}: 量能闸门 无量({vol_ratio:.3f})，"
+                      f"base_score {candidates_prev_score}→{candidate['base_score']}，禁入候选")
+                continue
+            elif vol_ratio < HK_VOLUME_GATE_WARN:
+                penalty = HK_VOLUME_GATE_WARN_PENALTY
+                reason = f"量能不足({vol_ratio:.3f}×<{HK_VOLUME_GATE_WARN})，降{penalty}分"
+            else:
+                candidate.setdefault('volume_gate', 'passed')
+                continue
+            candidate['base_score'] = max(0, candidates_prev_score - penalty)
+            candidate['score'] = candidate['base_score']
+            candidate['volume_gate'] = reason
+            print(f"   💧 {candidate.get('symbol')}: 量能闸门 {reason}，base_score {candidates_prev_score}→{candidate['base_score']}")
 
         # 第二层：第一层达标候选按分数降序逐只执行真实港股五源评分。
         eligible = sorted(
