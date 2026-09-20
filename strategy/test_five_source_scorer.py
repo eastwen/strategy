@@ -418,6 +418,9 @@ class FiveSourceScoringTest(unittest.TestCase):
             llm_conclusion='测试结论',
             order_id='TEST',
             timestamp='2026-07-15 00:00:00',
+            signal_price=99.5,
+            protected_limit=100.25,
+            entry_setup='回踩企稳',
             score_adjustments={
                 'news': 12.5,
                 'announce': 0,
@@ -429,6 +432,36 @@ class FiveSourceScoringTest(unittest.TestCase):
 
         self.assertIn('国际资讯: 25/25 (较中性+12.5)', messages[0])
         self.assertIn('官方公告: 10/20 (较中性+0.0)', messages[0])
+        self.assertIn('买入成交价: ~$100.00', messages[0])
+        self.assertIn('信号参考价: ~$99.50', messages[0])
+        self.assertIn('盘中买点: 回踩企稳', messages[0])
+        self.assertIn('保护限价: ~$100.25', messages[0])
+
+    def test_non_trading_notification_displays_reference_prices(self):
+        pusher = object.__new__(FeishuPusher)
+        messages = []
+        pusher.send_message = lambda content: messages.append(content) or True
+
+        pusher.send_opportunity_notification(
+            symbol='US.TEST',
+            score_total=88,
+            score_news=25,
+            score_announce=18,
+            score_community=20,
+            score_institution=18,
+            score_capital=7,
+            signal_type='测试',
+            llm_conclusion='测试结论',
+            market_status='盘前',
+            timestamp='2026-09-21 08:00:00',
+            reference_price=100,
+            max_entry_price=101.5,
+            price_time='2026-09-21 07:59:00',
+        )
+
+        self.assertIn('信号参考价: ~$100.00', messages[0])
+        self.assertIn('规则追高上限: ~$101.50', messages[0])
+        self.assertIn('参考价时间: 2026-09-21 07:59:00', messages[0])
 
     def test_llm_prompt_uses_neutral_semantics(self):
         analyzer = object.__new__(LLMStockAnalyzer)

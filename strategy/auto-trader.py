@@ -15,6 +15,8 @@ import os
 import json
 import time
 import re
+import math
+import fcntl
 import requests
 from datetime import datetime, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
@@ -23,6 +25,7 @@ from runtime_config import (
     DATA_DIR,
     FUTU_HOST,
     FUTU_PORT,
+    RUNTIME_DIR,
     STRATEGY_DIR,
     STRATEGY_POLICY,
     SYSTEM_VERSION,
@@ -63,6 +66,8 @@ class AutoTrader:
         self.closed_trades_file = str(DATA_DIR / 'closed-trades.json')
         self.open_positions_file = str(DATA_DIR / 'open-positions.json')
         self.staged_reductions_file = str(DATA_DIR / 'staged-reductions.json')
+        self.us_entry_state_file = str(RUNTIME_DIR / 'us-entry-timing.json')
+        self.hk_entry_state_file = str(RUNTIME_DIR / 'hk-entry-timing.json')
         self._market_sentiment_cache = {'data': None, 'timestamp': 0}
         self._llm_neg_verify_cache = {}   # 2026-08-25 重大利空LLM复核缓存 {key: (ts, ok, reason)}
 
@@ -622,16 +627,36 @@ class AutoTrader:
             print(f"❌ 连接Futu失败: {e}")
             return False
 
-    def place_order(self, symbol, side, quantity, market='us'):
-        """下单"""
+    def place_order(self, symbol, side, quantity, market='us', limit_price=None):
+        """下单。美股买入可传入价格保护限价；其他订单保持原有市价逻辑。"""
         # 选择正确的交易上下文
         ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
+        lock_handle = None
         try:
+            if market in ('us', 'hk') and side == 'BUY':
+                # 扫描器和 auto-trader 使用不同 cron 锁，这里再做跨进程原子保护。
+                lock_handle = open(f'/tmp/{market}-entry-order.lock', 'w')
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+
+                # 获得锁后重新核对持仓和活动订单，防止两个入口同时提交买单。
+                ret, positions = ctx.position_list_query(code=symbol, trd_env=TrdEnv.SIMULATE)
+                if ret == RET_OK and positions is not None and any(
+                    float(getattr(row, 'qty', 0) or 0) > 0 for row in positions.itertuples()
+                ):
+                    return False, f'{symbol} 已持仓'
+                ret, orders = ctx.order_list_query(code=symbol, trd_env=TrdEnv.SIMULATE)
+                if ret == RET_OK and orders is not None and len(orders) > 0:
+                    pending = orders[~orders['order_status'].isin(TERMINAL_ORDER_STATUSES)]
+                    if len(pending) > 0:
+                        return False, f'{symbol} 已有未完成订单'
+
+            protected_limit = float(limit_price or 0)
+            use_protected_limit = market in ('us', 'hk') and side == 'BUY' and protected_limit > 0
             ret, data = ctx.place_order(
-                price=0,  # 市价单
+                price=protected_limit if use_protected_limit else 0,
                 qty=quantity,
                 code=symbol,
-                order_type=OrderType.MARKET,
+                order_type=OrderType.NORMAL if use_protected_limit else OrderType.MARKET,
                 trd_side=TrdSide.BUY if side == 'BUY' else TrdSide.SELL,
                 trd_env=TrdEnv.SIMULATE
             )
@@ -639,7 +664,8 @@ class AutoTrader:
             if ret == RET_OK:
                 order_id = data['order_id'].iloc[0]
                 market_tag = '🇭🇰' if market == 'hk' else '🇺🇸'
-                print(f"{market_tag} 下单成功: 订单ID {order_id}")
+                order_desc = f'保护限价 ${protected_limit:.4f}' if use_protected_limit else '市价'
+                print(f"{market_tag} 下单成功: 订单ID {order_id} ({order_desc})")
                 return True, order_id
             else:
                 print(f"❌ 下单失败: {data}")
@@ -647,6 +673,13 @@ class AutoTrader:
         except Exception as e:
             print(f"❌ 下单异常: {e}")
             return False, str(e)
+        finally:
+            if lock_handle is not None:
+                try:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                    lock_handle.close()
+                except Exception:
+                    pass
 
     def _wait_filled_price(self, order_id, market='us', timeout=10, poll_interval=0.5):
         """等订单状态 FILLED_ALL 并回查真实成交均价 dealt_avg_price。
@@ -705,7 +738,9 @@ class AutoTrader:
         except Exception as e:
             print(f"  ⚠️ 待确认卖单登记失败: {e}")
 
-    def _queue_pending_buy(self, order_id, symbol, market, quantity, score, reasons):
+    def _queue_pending_buy(self, order_id, symbol, market, quantity, score, reasons,
+                           entry_signal_id='', order_expires_at=None,
+                           signal_price=None, limit_price=None, entry_setup=''):
         path = DATA_DIR / 'pending-buy-orders.json'
         try:
             data = json.loads(path.read_text()) if path.exists() else {}
@@ -713,6 +748,11 @@ class AutoTrader:
                 'order_id': str(order_id), 'symbol': symbol, 'market': market,
                 'quantity': int(quantity), 'score': float(score or 0),
                 'reasons': reasons or [], 'created_at': datetime.now().isoformat(),
+                'entry_signal_id': entry_signal_id or '',
+                'expires_at': order_expires_at,
+                'signal_price': float(signal_price or 0),
+                'limit_price': float(limit_price or 0),
+                'entry_setup': entry_setup or '',
             }
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
             print(f"  ⏳ 已登记待确认买单: {order_id}")
@@ -727,7 +767,10 @@ class AutoTrader:
             print(f"⚠️ 读取待确认买单失败: {e}")
             return
         changed = False
-        terminal = ('CANCELLED_ALL', 'FAILED', 'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT')
+        terminal = (
+            'CANCELLED_ALL', 'CANCELLED_PART', 'FILL_CANCELLED', 'FAILED',
+            'DISABLED', 'DELETED', 'SUBMIT_FAILED', 'TIMEOUT',
+        )
         for oid, item in list(data.items()):
             market = item.get('market', 'us')
             ctx = self.hk_trade_ctx if market == 'hk' else self.trade_ctx
@@ -746,7 +789,27 @@ class AutoTrader:
                 status = str(row.get('order_status', ''))
                 price = float(row.get('dealt_avg_price', 0) or 0)
                 qty = int(row.get('dealt_qty', 0) or 0)
-                if status == 'FILLED_ALL' and price > 0 and qty > 0:
+                expires_at = self._parse_entry_datetime(item.get('expires_at'))
+                if (
+                    status not in terminal and status != 'FILLED_ALL'
+                    and expires_at and datetime.now() >= expires_at
+                ):
+                    if not item.get('cancel_requested_at'):
+                        cancel_ret, cancel_data = ctx.modify_order(
+                            ModifyOrderOp.CANCEL, str(oid), 0, 0,
+                            trd_env=TrdEnv.SIMULATE,
+                        )
+                        if cancel_ret == RET_OK:
+                            item['cancel_requested_at'] = datetime.now().isoformat()
+                            data[oid] = item
+                            changed = True
+                            print(f"  ⏹️ 买单 {oid} 已到价格保护时限，撤单且不追价")
+                        else:
+                            print(f"  ⚠️ 买单 {oid} 超时撤单失败: {cancel_data}")
+                    continue
+
+                # 全部成交，或撤单前已有部分真实成交，都按实际数量记录。
+                if (status == 'FILLED_ALL' or status in terminal) and price > 0 and qty > 0:
                     symbol = item['symbol']
                     reasons = item.get('reasons', []) or []
                     score = float(item.get('score', 0) or 0)
@@ -778,10 +841,20 @@ class AutoTrader:
                             'capital': details.get('evidence_capital', ''),
                         },
                         order_id=oid, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        signal_price=item.get('signal_price'),
+                        protected_limit=item.get('limit_price'),
+                        entry_setup=item.get('entry_setup', ''),
+                    )
+                    self._mark_entry_state(
+                        symbol, market, item.get('entry_signal_id', ''), 'filled', order_id=oid
                     )
                     del data[oid]
                     changed = True
                 elif status in terminal:
+                    self._mark_entry_state(
+                        item.get('symbol', ''), market, item.get('entry_signal_id', ''),
+                        'cancelled', order_id=oid,
+                    )
                     del data[oid]
                     changed = True
             except Exception as e:
@@ -1630,7 +1703,10 @@ class AutoTrader:
 
         return True, "可以交易"
 
-    def execute_trade(self, symbol, side, quantity, price, market='us', force=False, skip_llm=False, score=0, reasons=None, entry_price_override=None, opp=None):
+    def execute_trade(self, symbol, side, quantity, price, market='us', force=False,
+                      skip_llm=False, score=0, reasons=None, entry_price_override=None,
+                      opp=None, limit_price=None, entry_signal_id='', order_expires_at=None,
+                      signal_price=None, entry_setup=''):
         """执行交易
 
         Args:
@@ -1652,6 +1728,14 @@ class AutoTrader:
         print(f"数量: {quantity}股")
         print(f"价格: ${price:.2f}")
         print(f"金额: ${quantity * price:,.2f}")
+        if market in ('us', 'hk') and side == 'BUY' and limit_price:
+            print(f"价格保护: 限价不高于 ${float(limit_price):.4f}")
+        signal_reference_price = float(
+            signal_price
+            or ((opp or {}).get('price', 0) if isinstance(opp, dict) else 0)
+            or price
+            or 0
+        )
 
         # 仅在富途确认成交后写入本次执行详情，供平仓记录使用。
         self._last_execution = None
@@ -1726,9 +1810,15 @@ class AutoTrader:
                         return False
 
         # 下单
-        success, result = self.place_order(symbol, side, quantity, market)
+        success, result = self.place_order(
+            symbol, side, quantity, market, limit_price=limit_price
+        )
 
         if success:
+            if market in ('us', 'hk') and side == 'BUY':
+                self._mark_entry_state(
+                    symbol, market, entry_signal_id, 'order_submitted', order_id=result
+                )
             # === 真实成交价回查（防止 quote 价被当成交价；尤其港股 09:30 集合竞价跳价） ===
             quoted_price = price  # 触发判定时读到的报价
             filled_price, filled_qty, fill_status = self._wait_filled_price(
@@ -1754,7 +1844,14 @@ class AutoTrader:
                 if side == 'SELL':
                     self._queue_pending_sell(result, symbol, market, quantity, entry_price_override, reasons)
                 elif side == 'BUY':
-                    self._queue_pending_buy(result, symbol, market, quantity, score, reasons)
+                    self._queue_pending_buy(
+                        result, symbol, market, quantity, score, reasons,
+                        entry_signal_id=entry_signal_id,
+                        order_expires_at=order_expires_at,
+                        signal_price=signal_reference_price,
+                        limit_price=limit_price,
+                        entry_setup=entry_setup,
+                    )
                 return False
 
 
@@ -1782,6 +1879,10 @@ class AutoTrader:
                     entry_risk_targets = None
                 self.save_open_position(symbol, quantity, price, market, score=entry_score, reasons=reasons,
                                         risk_targets=entry_risk_targets)
+                if market in ('us', 'hk'):
+                    self._mark_entry_state(
+                        symbol, market, entry_signal_id, 'filled', order_id=result
+                    )
 
             # 使用新模板发送通知
             from feishu_pusher import FeishuPusher
@@ -1817,7 +1918,10 @@ class AutoTrader:
                         'capital': signal_details.get('evidence_capital', ''),
                     },
                     order_id=result,
-                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    signal_price=signal_reference_price,
+                    protected_limit=limit_price,
+                    entry_setup=entry_setup,
                 )
             else:
                 sell_reason = reasons[0] if reasons else "自动平仓"
@@ -2124,7 +2228,364 @@ class AutoTrader:
             return result, f"总仓位将达到{result['after_total_pct']:.1f}%，超过{result['total_limit_pct']:.1f}%上限"
         return result, ''
 
-    def prepare_buy_order(self, account, symbol, price, score, market='us', lot_size=1):
+    def _entry_state_file(self, market):
+        return self.hk_entry_state_file if market == 'hk' else self.us_entry_state_file
+
+    def _load_entry_states(self, market):
+        try:
+            with open(self._entry_state_file(market), 'r', encoding='utf-8') as handle:
+                value = json.load(handle)
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_entry_states(self, market, states):
+        path = self._entry_state_file(market)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(states, handle, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+    @staticmethod
+    def _parse_entry_datetime(value):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone().replace(tzinfo=None)
+            return parsed
+        except (TypeError, ValueError):
+            return None
+
+    def _get_intraday_entry_snapshot(self, symbol, market='us', now_market=None):
+        """读取指定市场当日分钟线并计算盘中买点；只使用已完成的1分钟K线。"""
+        if self.quote_ctx is None:
+            return None, '富途行情连接不可用'
+
+        from futu import KLType, AuType, SubType
+
+        market = 'hk' if market == 'hk' else 'us'
+        prefix = 'HK.' if market == 'hk' else 'US.'
+        market_zone = ZoneInfo('Asia/Hong_Kong') if market == 'hk' else ZoneInfo('America/New_York')
+        full_symbol = symbol if str(symbol).startswith(prefix) else f'{prefix}{symbol}'
+        now_market = now_market or datetime.now(market_zone)
+        subscribed = False
+        try:
+            ret, snapshot = self.quote_ctx.get_market_snapshot([full_symbol])
+            if ret != RET_OK or snapshot is None or len(snapshot) == 0:
+                return None, f'实时行情获取失败({snapshot})'
+            quote = snapshot.iloc[0]
+
+            ret, detail = self.quote_ctx.subscribe(
+                [full_symbol], [SubType.K_1M], subscribe_push=False
+            )
+            if ret != RET_OK:
+                return None, f'1分钟K线订阅失败({detail})'
+            subscribed = True
+            ret, bars = self.quote_ctx.get_cur_kline(
+                full_symbol, 400, KLType.K_1M, AuType.QFQ
+            )
+            if ret != RET_OK or bars is None or len(bars) == 0:
+                return None, f'1分钟K线获取失败({bars})'
+
+            session_date = now_market.date().isoformat()
+            bars = bars[bars['time_key'].astype(str).str[:10] == session_date].copy()
+            current_minute = now_market.replace(second=0, microsecond=0, tzinfo=None)
+            bar_times = bars['time_key'].apply(self._parse_entry_datetime)
+            bars = bars[bar_times < current_minute].copy()
+
+            config = self.hk_config if market == 'hk' else self.us_config
+            cfg = config.get('entry_timing', {})
+            min_bars = int(cfg.get('min_session_bars', 8))
+            if len(bars) < min_bars:
+                return None, f'当日已完成分钟K线仅{len(bars)}根，至少需要{min_bars}根'
+
+            latest_bar_time = self._parse_entry_datetime(bars.iloc[-1]['time_key'])
+            if latest_bar_time is None or (current_minute - latest_bar_time).total_seconds() > 300:
+                return None, '分钟K线超过5分钟未更新'
+
+            quote_time = self._parse_entry_datetime(quote.get('update_time'))
+            if quote_time is None or abs((now_market.replace(tzinfo=None) - quote_time).total_seconds()) > 300:
+                return None, '实时报价超过5分钟未更新'
+
+            closes = bars['close'].astype(float)
+            volumes = bars['volume'].astype(float).clip(lower=0)
+            turnovers = bars['turnover'].astype(float).clip(lower=0)
+            total_volume = float(volumes.sum())
+            total_turnover = float(turnovers.sum())
+            if total_volume <= 0:
+                return None, '当日分钟成交量无效'
+            if total_turnover > 0:
+                vwap = total_turnover / total_volume
+            else:
+                typical = (
+                    bars['high'].astype(float)
+                    + bars['low'].astype(float)
+                    + closes
+                ) / 3
+                vwap = float((typical * volumes).sum() / total_volume)
+            ema9 = float(closes.ewm(span=9, adjust=False).mean().iloc[-1])
+            support = max(vwap, ema9)
+
+            current_price = float(quote.get('last_price', 0) or 0)
+            ask_price = float(quote.get('ask_price', 0) or 0) or current_price
+            day_high = float(quote.get('high_price', 0) or 0)
+            if current_price <= 0 or ask_price <= 0 or day_high <= 0:
+                return None, '实时价格、卖一价或日内高点无效'
+
+            recent = bars.tail(5)
+            latest_two = bars.tail(2)
+            touched_support = float(recent['low'].astype(float).min()) <= support * 1.003
+            reclaimed_support = (
+                len(latest_two) == 2
+                and bool((latest_two['close'].astype(float) >= support * 0.999).all())
+                and float(latest_two.iloc[-1]['close']) >= float(latest_two.iloc[-2]['close'])
+                and current_price >= support * 0.999
+            )
+            pullback_ready = touched_support and reclaimed_support
+
+            hold_bars = max(2, int(cfg.get('breakout_hold_bars', 2)))
+            prior = bars.iloc[:-hold_bars]
+            held = bars.tail(hold_bars)
+            breakout_level = float(prior['high'].astype(float).max()) if len(prior) else 0.0
+            prior_volumes = prior.tail(20)['volume'].astype(float)
+            prior_volumes = prior_volumes[prior_volumes > 0]
+            median_volume = float(prior_volumes.median()) if len(prior_volumes) else 0.0
+            breakout_volume_ratio = (
+                float(held['volume'].astype(float).mean()) / median_volume
+                if median_volume > 0 else 0.0
+            )
+            breakout_ready = (
+                breakout_level > 0
+                and bool((held['close'].astype(float) > breakout_level * 1.0005).all())
+                and current_price >= breakout_level
+                and breakout_volume_ratio >= float(cfg.get('breakout_volume_ratio', 1.2))
+            )
+
+            near_high_distance_pct = (day_high - current_price) / day_high * 100
+            price_spread = float(quote.get('price_spread', 0) or 0)
+            if price_spread <= 0:
+                price_spread = 0.01 if current_price >= 1 else 0.0001
+
+            return {
+                'current_price': current_price,
+                'ask_price': ask_price,
+                'day_high': day_high,
+                'near_high_distance_pct': near_high_distance_pct,
+                'vwap': vwap,
+                'ema9': ema9,
+                'support': support,
+                'pullback_ready': pullback_ready,
+                'breakout_ready': breakout_ready,
+                'breakout_level': breakout_level,
+                'breakout_volume_ratio': breakout_volume_ratio,
+                'price_spread': price_spread,
+                'completed_bars': len(bars),
+                'quote_time': str(quote.get('update_time') or ''),
+            }, ''
+        except Exception as exc:
+            return None, f'盘中买点数据异常({exc})'
+        finally:
+            if subscribed:
+                try:
+                    self.quote_ctx.unsubscribe([full_symbol], [SubType.K_1M])
+                except Exception:
+                    pass
+
+    def _get_us_intraday_entry_snapshot(self, symbol, now_et=None):
+        """兼容旧调用：读取美股盘中买点快照。"""
+        return self._get_intraday_entry_snapshot(symbol, market='us', now_market=now_et)
+
+    def evaluate_entry_timing(self, symbol, signal_price, market='us', opp=None, now=None):
+        """登记并评估指定市场的盘中买点，返回可执行价格保护信息。"""
+        market = 'hk' if market == 'hk' else 'us'
+        config = self.hk_config if market == 'hk' else self.us_config
+        cfg = config.get('entry_timing', {})
+        if not cfg.get('enabled', False):
+            return {
+                'ready': True,
+                'reason': '盘中买点控制未启用',
+                'current_price': float(signal_price or 0),
+                'limit_price': None,
+                'signal_id': '',
+            }
+
+        now = now or datetime.now()
+        market_zone = ZoneInfo('Asia/Hong_Kong') if market == 'hk' else ZoneInfo('America/New_York')
+        if now.tzinfo is not None:
+            now_market = now.astimezone(market_zone)
+            now = now.astimezone().replace(tzinfo=None)
+        else:
+            now_market = now.replace(tzinfo=ZoneInfo('Asia/Shanghai')).astimezone(market_zone)
+        target = self.normalize_symbol(symbol)
+        opp = opp if isinstance(opp, dict) else {}
+        source_timestamp = str(opp.get('timestamp') or now.isoformat())
+        signal_price = float(signal_price or opp.get('price', 0) or 0)
+        signal_id = f'{market}|{target}|{source_timestamp}|{float(opp.get("final_score", opp.get("score", 0)) or 0):g}|{signal_price:.4f}'
+
+        lock_handle = open(f'/tmp/{market}-entry-state.lock', 'w')
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            states = self._load_entry_states(market)
+            # 状态只保留7天，避免长期膨胀。
+            for key, value in list(states.items()):
+                updated = self._parse_entry_datetime((value or {}).get('updated_at'))
+                if updated and (now - updated).total_seconds() > 7 * 86400:
+                    del states[key]
+
+            state = states.get(target) or {}
+            if state.get('signal_id') != signal_id:
+                state = {
+                    'symbol': target,
+                    'signal_id': signal_id,
+                    'source_timestamp': source_timestamp,
+                    'signal_price': signal_price,
+                    'first_seen': now.isoformat(),
+                    'status': 'watching',
+                    'observations': [],
+                }
+
+            if state.get('status') in ('order_submitted', 'filled', 'cancelled'):
+                return {
+                    'ready': False,
+                    'reason': '该次候选信号已提交过买单，不重复追单',
+                    'signal_id': signal_id,
+                }
+
+            source_dt = self._parse_entry_datetime(source_timestamp)
+            max_signal_age = float(cfg.get('max_signal_age_minutes', 90))
+            if source_dt and (now - source_dt).total_seconds() > max_signal_age * 60:
+                state.update(status='stale', updated_at=now.isoformat(), last_reason='候选信号已过期')
+                states[target] = state
+                self._save_entry_states(market, states)
+                return {'ready': False, 'reason': f'候选信号超过{max_signal_age:g}分钟，禁止使用旧信号', 'signal_id': signal_id}
+
+            first_seen = self._parse_entry_datetime(state.get('first_seen')) or now
+            watch_minutes = float(cfg.get('watch_minutes', 30))
+            age_minutes = max(0.0, (now - first_seen).total_seconds() / 60)
+            if age_minutes > watch_minutes:
+                state.update(status='expired', updated_at=now.isoformat(), last_reason='观察窗口已过期')
+                states[target] = state
+                self._save_entry_states(market, states)
+                return {'ready': False, 'reason': f'{watch_minutes:g}分钟内未出现有效盘中买点，本次放弃', 'signal_id': signal_id}
+
+            snapshot, error = self._get_intraday_entry_snapshot(
+                symbol, market=market, now_market=now_market
+            )
+            if snapshot is None:
+                reason = f'等待盘中买点：{error}'
+                state.update(status='watching', updated_at=now.isoformat(), last_reason=reason)
+                states[target] = state
+                self._save_entry_states(market, states)
+                return {'ready': False, 'reason': reason, 'signal_id': signal_id}
+
+            current_price = snapshot['current_price']
+            drift_pct = ((current_price / signal_price) - 1) * 100 if signal_price > 0 else 0.0
+            near_high_limit = float(cfg.get('near_day_high_pct', 0.5))
+            max_drift = float(cfg.get('max_signal_drift_pct', 1.5))
+            ready = False
+            setup = ''
+            currency = 'HK$' if market == 'hk' else '$'
+            if drift_pct > max_drift:
+                reason = f'等待回落：现价较信号价上涨{drift_pct:.2f}%，超过{max_drift:.2f}%追高上限'
+            elif snapshot['breakout_ready']:
+                ready = True
+                setup = '放量突破确认'
+                reason = (
+                    f'放量突破{currency}{snapshot["breakout_level"]:.4f}并连续站稳，'
+                    f'突破量比{snapshot["breakout_volume_ratio"]:.2f}x'
+                )
+            elif snapshot['near_high_distance_pct'] < near_high_limit:
+                reason = f'等待回落：距日内高点仅{snapshot["near_high_distance_pct"]:.2f}%且尚未完成突破确认'
+            elif snapshot['pullback_ready']:
+                ready = True
+                setup = '回踩企稳'
+                reason = f'回踩后重新站稳VWAP {currency}{snapshot["vwap"]:.4f}/EMA9 {currency}{snapshot["ema9"]:.4f}'
+            else:
+                reason = f'等待回踩企稳或放量突破确认（VWAP {currency}{snapshot["vwap"]:.4f}，EMA9 {currency}{snapshot["ema9"]:.4f}）'
+
+            limit_price = None
+            if ready:
+                buffer_pct = float(cfg.get('limit_buffer_pct', 0.25)) / 100
+                max_limit = min(current_price * 1.003, signal_price * (1 + max_drift / 100))
+                raw_limit = min(snapshot['ask_price'] * (1 + buffer_pct), max_limit)
+                tick = snapshot['price_spread']
+                limit_price = math.floor((raw_limit + 1e-12) / tick) * tick
+                decimals = max(2, min(4, len(f'{tick:.8f}'.rstrip('0').split('.')[-1])))
+                limit_price = round(limit_price, decimals)
+                if limit_price + 1e-9 < snapshot['ask_price']:
+                    ready = False
+                    setup = ''
+                    reason = '卖一价已超过允许追价上限，继续等待'
+                    limit_price = None
+
+            observation = {
+                'time': now.isoformat(),
+                'current_price': round(current_price, 4),
+                'drift_pct': round(drift_pct, 3),
+                'near_high_distance_pct': round(snapshot['near_high_distance_pct'], 3),
+                'pullback_ready': snapshot['pullback_ready'],
+                'breakout_ready': snapshot['breakout_ready'],
+                'reason': reason,
+            }
+            observations = list(state.get('observations') or [])[-11:]
+            observations.append(observation)
+            state.update(
+                status='ready' if ready else 'watching',
+                updated_at=now.isoformat(),
+                last_reason=reason,
+                setup=setup,
+                observations=observations,
+            )
+            states[target] = state
+            self._save_entry_states(market, states)
+            return {
+                'ready': ready,
+                'reason': reason,
+                'setup': setup,
+                'current_price': current_price,
+                'limit_price': limit_price,
+                'signal_id': signal_id,
+                'order_expires_at': (now + timedelta(seconds=int(cfg.get('order_ttl_seconds', 120)))).isoformat(),
+                'metrics': snapshot,
+            }
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+
+    def evaluate_us_entry_timing(self, symbol, signal_price, opp=None, now=None):
+        """兼容旧调用：登记并评估美股盘中买点。"""
+        return self.evaluate_entry_timing(
+            symbol, signal_price, market='us', opp=opp, now=now
+        )
+
+    def _mark_entry_state(self, symbol, market, signal_id, status, order_id=None):
+        if not signal_id:
+            return
+        market = 'hk' if market == 'hk' else 'us'
+        lock_handle = open(f'/tmp/{market}-entry-state.lock', 'w')
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            states = self._load_entry_states(market)
+            key = self.normalize_symbol(symbol)
+            state = states.get(key) or {}
+            if state.get('signal_id') == signal_id:
+                state.update(status=status, updated_at=datetime.now().isoformat())
+                if order_id is not None:
+                    state['order_id'] = str(order_id)
+                states[key] = state
+                self._save_entry_states(market, states)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            lock_handle.close()
+
+    def _mark_us_entry_state(self, symbol, signal_id, status, order_id=None):
+        """兼容旧调用：更新美股盘中买点状态。"""
+        self._mark_entry_state(symbol, 'us', signal_id, status, order_id=order_id)
+
+    def prepare_buy_order(self, account, symbol, price, score, market='us', lot_size=1, opp=None):
         """统一买入仓位计算和下单前风控。"""
         try:
             price = float(price or 0)
@@ -2171,6 +2632,28 @@ class AutoTrader:
                 }
             if sentiment_total_limit is not None:
                 total_limit = min(total_limit, sentiment_total_limit)
+
+        entry_timing = None
+        # 生产买入入口都会传入本次机会对象。普通计算/测试不传 opp 时保持纯仓位计算。
+        if market in ('us', 'hk') and isinstance(opp, dict):
+            entry_timing = self.evaluate_entry_timing(
+                symbol, price, market=market, opp=opp
+            )
+            if not entry_timing.get('ready', False):
+                return {
+                    'can_buy': False,
+                    'reason': entry_timing.get('reason', '盘中买点尚未确认'),
+                    'quantity': 0,
+                    'entry_timing': entry_timing,
+                }
+            price = float(entry_timing.get('current_price') or price)
+            if price <= 0:
+                return {
+                    'can_buy': False,
+                    'reason': '盘中买点返回的实时价格无效',
+                    'quantity': 0,
+                    'entry_timing': entry_timing,
+                }
 
         target_pct = min(base_pct, single_limit)
         target_value = total_assets * target_pct
@@ -2241,6 +2724,12 @@ class AutoTrader:
             'market_sentiment_multiplier': multiplier,
             'market_sentiment_reason': market_sentiment_reason,
             'market_sentiment': market_sentiment_data,
+            'execution_price': price,
+            'limit_price': entry_timing.get('limit_price') if entry_timing else None,
+            'entry_signal_id': entry_timing.get('signal_id', '') if entry_timing else '',
+            'order_expires_at': entry_timing.get('order_expires_at') if entry_timing else None,
+            'entry_setup': entry_timing.get('setup', '') if entry_timing else '',
+            'entry_timing': entry_timing,
             **position_check,
         }
 
@@ -2885,7 +3374,13 @@ class AutoTrader:
                                 'capital': signal_details.get('evidence_capital', ''),
                             },
                             market_status=market_status,
-                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            reference_price=o.get('price'),
+                            max_entry_price=(
+                                float(o.get('price', 0) or 0)
+                                * (1 + float(self.us_config.get('entry_timing', {}).get('max_signal_drift_pct', 1.5)) / 100)
+                            ) if float(o.get('price', 0) or 0) > 0 else None,
+                            price_time=str(o.get('timestamp') or ''),
                         )
                         self.recently_closed[f"opp_{symbol}"] = time.time()
                         self._save_notify_cooldowns()
@@ -3170,12 +3665,15 @@ class AutoTrader:
                             print(f"      {r}")
                         continue  # 跳过不满足技术条件的股票
 
-                    order_plan = self.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
+                    order_plan = self.prepare_buy_order(
+                        us_account, futu_symbol, price, score, market='us', opp=o
+                    )
                     if not order_plan.get('can_buy'):
                         print(f"  ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                         continue
 
                     quantity = order_plan['quantity']
+                    entry_price = order_plan['execution_price']
                     print(
                         f"  💰 {symbol}: 评分仓位{order_plan['base_pct']*100:.1f}% "
                         f"· 市场总仓位上限{order_plan['total_limit_pct']:.0f}% "
@@ -3184,7 +3682,17 @@ class AutoTrader:
                     )
                     # 构建开仓原因列表
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
-                    success = self.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', skip_llm=True, score=score, reasons=entry_reasons, opp=o)
+                    if order_plan.get('entry_setup'):
+                        entry_reasons.append(f"盘中买点: {order_plan['entry_setup']}")
+                    success = self.execute_trade(
+                        futu_symbol, 'BUY', quantity, entry_price, 'us',
+                        skip_llm=True, score=score, reasons=entry_reasons, opp=o,
+                        limit_price=order_plan.get('limit_price'),
+                        entry_signal_id=order_plan.get('entry_signal_id', ''),
+                        order_expires_at=order_plan.get('order_expires_at'),
+                        signal_price=price,
+                        entry_setup=order_plan.get('entry_setup', ''),
+                    )
                     if success:
                         # 更新持仓计数和本轮内存市值，避免同一轮连续突破总仓位
                         us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
@@ -3231,20 +3739,34 @@ class AutoTrader:
                         continue
 
                     lot_size = self._get_hk_lot_size(symbol)
-                    order_plan = self.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
+                    order_plan = self.prepare_buy_order(
+                        hk_account, symbol, price, score,
+                        market='hk', lot_size=lot_size, opp=o,
+                    )
                     if not order_plan.get('can_buy'):
                         print(f"  ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                         continue
 
                     quantity = order_plan['quantity']
+                    entry_price = order_plan['execution_price']
                     print(
-                        f"  💰 {symbol}: 价格{price}, 原始数量{order_plan['raw_quantity']}, "
+                        f"  💰 {symbol}: 实时价格{entry_price}, 原始数量{order_plan['raw_quantity']}, "
                         f"整手数量{quantity}(每手{lot_size}), 实际金额${order_plan['order_value']:,.2f}, "
                         f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
                     )
                     # 构建开仓原因列表
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
-                    success = self.execute_trade(symbol, 'BUY', quantity, price, 'hk', skip_llm=True, score=score, reasons=entry_reasons, opp=o)
+                    if order_plan.get('entry_setup'):
+                        entry_reasons.append(f"盘中买点: {order_plan['entry_setup']}")
+                    success = self.execute_trade(
+                        symbol, 'BUY', quantity, entry_price, 'hk',
+                        skip_llm=True, score=score, reasons=entry_reasons, opp=o,
+                        limit_price=order_plan.get('limit_price'),
+                        entry_signal_id=order_plan.get('entry_signal_id', ''),
+                        order_expires_at=order_plan.get('order_expires_at'),
+                        signal_price=price,
+                        entry_setup=order_plan.get('entry_setup', ''),
+                    )
                     if success:
                         hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
                         hk_account['market_val'] = hk_account['total_assets'] * order_plan['after_total_pct'] / 100
@@ -3690,17 +4212,31 @@ if __name__ == '__main__':
 
                         price = o.get('price', 0)
                         score = o.get('final_score', o.get('score', 0))
-                        order_plan = trader.prepare_buy_order(us_account, futu_symbol, price, score, market='us')
+                        order_plan = trader.prepare_buy_order(
+                            us_account, futu_symbol, price, score, market='us', opp=o
+                        )
                         if not order_plan.get('can_buy'):
                             print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                             continue
 
                         quantity = order_plan['quantity']
+                        entry_price = order_plan['execution_price']
                         print(
-                            f"[{now}] 🎯 买入 {symbol} (评分{score}, ${price}, 数量{quantity}, "
+                            f"[{now}] 🎯 买入 {symbol} (评分{score}, ${entry_price}, 数量{quantity}, "
                             f"金额${order_plan['order_value']:,.2f}, 总仓位{order_plan['after_total_pct']:.1f}%)"
                         )
-                        success = trader.execute_trade(futu_symbol, 'BUY', quantity, price, 'us', skip_llm=True, score=score, reasons=o.get('reasons', []), opp=o)
+                        entry_reasons = list(o.get('reasons', []) or [])
+                        if order_plan.get('entry_setup'):
+                            entry_reasons.append(f"盘中买点: {order_plan['entry_setup']}")
+                        success = trader.execute_trade(
+                            futu_symbol, 'BUY', quantity, entry_price, 'us',
+                            skip_llm=True, score=score, reasons=entry_reasons, opp=o,
+                            limit_price=order_plan.get('limit_price'),
+                            entry_signal_id=order_plan.get('entry_signal_id', ''),
+                            order_expires_at=order_plan.get('order_expires_at'),
+                            signal_price=price,
+                            entry_setup=order_plan.get('entry_setup', ''),
+                        )
                         if success:
                             us_positions.append(futu_symbol)
                             us_account['positions'].append({'symbol': futu_symbol, 'shares': quantity, 'market_val': order_plan['order_value']})
@@ -3728,19 +4264,34 @@ if __name__ == '__main__':
                         print(f"[{now}] 💰 {symbol} 价格: {price}, 评分: {score}")
 
                         lot_size = trader._get_hk_lot_size(symbol)
-                        order_plan = trader.prepare_buy_order(hk_account, symbol, price, score, market='hk', lot_size=lot_size)
+                        order_plan = trader.prepare_buy_order(
+                            hk_account, symbol, price, score,
+                            market='hk', lot_size=lot_size, opp=o,
+                        )
                         if not order_plan.get('can_buy'):
                             print(f"[{now}] ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                             continue
 
                         quantity = order_plan['quantity']
+                        entry_price = order_plan['execution_price']
                         print(
                             f"[{now}] 📊 仓位计算: 目标${order_plan['target_value']:,.2f}, "
                             f"允许${order_plan['allowed_value']:,.2f}, 原始{order_plan['raw_quantity']}股 "
                             f"-> {quantity}股(每手{lot_size})"
                         )
-                        print(f"[{now}] 🎯 买入 {symbol} (评分{score}, 价格{price}, 数量{quantity})")
-                        success = trader.execute_trade(symbol, 'BUY', quantity, price, 'hk', skip_llm=True, score=score, reasons=o.get('reasons', []), opp=o)
+                        print(f"[{now}] 🎯 买入 {symbol} (评分{score}, 价格{entry_price}, 数量{quantity})")
+                        entry_reasons = list(o.get('reasons', []) or [])
+                        if order_plan.get('entry_setup'):
+                            entry_reasons.append(f"盘中买点: {order_plan['entry_setup']}")
+                        success = trader.execute_trade(
+                            symbol, 'BUY', quantity, entry_price, 'hk',
+                            skip_llm=True, score=score, reasons=entry_reasons, opp=o,
+                            limit_price=order_plan.get('limit_price'),
+                            entry_signal_id=order_plan.get('entry_signal_id', ''),
+                            order_expires_at=order_plan.get('order_expires_at'),
+                            signal_price=price,
+                            entry_setup=order_plan.get('entry_setup', ''),
+                        )
                         if success:
                             hk_positions.append(symbol)
                             hk_account['positions'].append({'symbol': symbol, 'shares': quantity, 'market_val': order_plan['order_value']})

@@ -113,7 +113,7 @@ class FeishuPusher:
         content = f"⚠️ {title}\n\n{message}\n\n时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"
         return self.send_message(content)
 
-    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None, score_adjustments=None):
+    def send_buy_notification(self, symbol, quantity, price, amount, target_take_profit, target_stop_loss, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, order_id, timestamp, risk_note='', estimated_keys=None, evidences=None, score_adjustments=None, signal_price=None, protected_limit=None, entry_setup=''):
         """发送自动买入通知(真实五源评分版)
 
         2026-06-24 east 修复：
@@ -129,11 +129,20 @@ class FeishuPusher:
             except Exception:
                 return str(v) if v is not None else '暂无'
 
+        currency = 'HK$' if str(symbol).upper().startswith('HK.') else '$'
         risk_block = risk_note.strip() if risk_note else ''
         if target_take_profit and target_stop_loss:
-            target_line = f"🎯 预测: 止盈价: {_fmt(target_take_profit)} / 止损价: {_fmt(target_stop_loss)}"
+            target_line = f"🎯 预测: 止盈价: {_fmt(target_take_profit, currency)} / 止损价: {_fmt(target_stop_loss, currency)}"
         else:
             target_line = "🎯 预测: 暂无明确目标价"
+        price_details = []
+        if signal_price:
+            price_details.append(f"信号参考价: ~{currency}{float(signal_price):.2f}")
+        if entry_setup:
+            price_details.append(f"盘中买点: {entry_setup}")
+        if protected_limit:
+            price_details.append(f"保护限价: ~{currency}{float(protected_limit):.2f}")
+        price_block = '\n'.join(price_details)
         uncov = set(estimated_keys or [])
         def tag(key):
             return ' (未覆盖)' if key in uncov else ''
@@ -155,8 +164,9 @@ class FeishuPusher:
 
 标的: {symbol}
 数量: {quantity}股
-买入价: ~${price:.2f}
-金额: ~${amount:,.2f}
+买入成交价: ~{currency}{price:.2f}
+金额: ~{currency}{amount:,.2f}
+{price_block}
 {target_line}
 
 📊 评分明细: 总分{score_total}
@@ -191,7 +201,7 @@ class FeishuPusher:
 时间: {timestamp}"""
         return self.send_message(content)
 
-    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None, score_adjustments=None):
+    def send_opportunity_notification(self, symbol, score_total, score_news, score_announce, score_community, score_institution, score_capital, signal_type, llm_conclusion, market_status, timestamp, estimated_keys=None, evidences=None, score_adjustments=None, reference_price=None, max_entry_price=None, price_time=''):
         """发送非交易时间交易机会通知(真实五源评分版)"""
         uncov = set(estimated_keys or [])
         def tag(key):
@@ -209,10 +219,19 @@ class FeishuPusher:
                 return f" (较中性{float(value):+.1f})"
             except (TypeError, ValueError):
                 return ''
+        price_details = []
+        if reference_price:
+            price_details.append(f"信号参考价: ~${float(reference_price):.2f}")
+        if max_entry_price:
+            price_details.append(f"规则追高上限: ~${float(max_entry_price):.2f}")
+        if price_time:
+            price_details.append(f"参考价时间: {price_time}")
+        price_block = '\n'.join(price_details)
         content = f"""🔔 【美股非交易时段高价值信号】
 
 市场状态: {market_status}
 标的: {symbol}
+{price_block}
 
 📊 评分明细: 总分{score_total}
  国际资讯: {score_news}/25{adjustment_tag('news')}{tag('news')}{ev_line('news')}

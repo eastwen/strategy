@@ -269,24 +269,30 @@ class WeeklyReportV3:
             'us': calc_stats(us_trades)
         }
     
+    # 账户ID -> 市场：15270898=美股(MARGIN)，15270899=港股(CASH)
+    # 统一化：持仓市场归属一律以 acc_id 判定，禁止用符号前缀判断（前缀已被剥掉）
+    US_ACC_ID = 15270898
+    HK_ACC_ID = 15270899
+
     def get_strategy_pnl_stats(self, market='us'):
         """获取策略持仓收益统计"""
-        # 筛选持仓
+        # 筛选持仓：以 acc_id 划分市场，避免剥掉前缀的港股被误判进美股
         if market == 'hk':
-            positions = [p for p in self.positions if p.get('acc_id') == 15270899 or 'HK' in str(p.get('symbol', ''))]
+            positions = [p for p in self.positions if p.get('acc_id') == self.HK_ACC_ID]
         else:
-            positions = [p for p in self.positions if 'HK' not in str(p.get('symbol', ''))]
-        
+            positions = [p for p in self.positions if p.get('acc_id') == self.US_ACC_ID]
+
         if not positions:
             return None
-        
+
         # 统计
         wins = [p for p in positions if p.get('pnl_pct', 0) > 0]
         losses = [p for p in positions if p.get('pnl_pct', 0) <= 0]
-        total_pnl = sum(p.get('market_val', 0) * p.get('pnl_pct', 0) / 100 for p in positions)
+        # 精确浮盈：市值 - 成本 = market_val - shares*cost（不用 pnl_pct 反推，避免高估）
+        total_pnl = sum(p.get('market_val', 0) - p.get('shares', 0) * p.get('cost', 0) for p in positions)
         avg_pnl_pct = sum(p.get('pnl_pct', 0) for p in positions) / len(positions) if positions else 0
         total_market_val = sum(p.get('market_val', 0) for p in positions)
-        
+
         return {
             'total': len(positions),
             'wins': len(wins),

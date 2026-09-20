@@ -70,7 +70,8 @@ class MonthlyReportV2:
                     'position_value': total_position
                 }
                 
-                # 获取持仓
+                # 获取持仓（统一化：保留 acc_id 划分市场归属，避免剥掉前缀后港股/美股混淆）
+                self.positions = []
                 for pos in positions_raw:
                     symbol = pos['symbol'].replace('US.', '').replace('HK.', '')
                     self.positions.append({
@@ -78,7 +79,8 @@ class MonthlyReportV2:
                         'shares': pos['shares'],
                         'cost': pos['cost_price'],
                         'pnl_pct': pos.get('pl_ratio', 0),  # trades.json 使用百分比数值
-                        'market_val': pos.get('market_val', 0)
+                        'market_val': pos.get('market_val', 0),
+                        'acc_id': pos.get('acc_id')
                     })
                 
                 print(f"✅ 获取账户数据: {len(self.positions)}只持仓")
@@ -87,6 +89,52 @@ class MonthlyReportV2:
             print(f"❌ 获取账户数据失败: {e}")
         return False
     
+    def calc_month_pnl(self):
+        """本月收益：以上月最后周快照为基准（数据统一化：统一用 weekly-history 快照）"""
+        try:
+            with open(str(DATA_DIR / 'weekly-history.json'), 'r') as f:
+                history = json.load(f)
+            keys = sorted(history.keys())
+            if len(keys) < 2:
+                raise ValueError('历史快照不足')
+            last_key = keys[-1]
+            prev_key = keys[-2]
+            cur = sum(a.get('total_asset', 0) for a in history[last_key].get('accounts', {}).values())
+            prev = sum(a.get('total_asset', 0) for a in history[prev_key].get('accounts', {}).values())
+            self._prev_key = prev_key
+            pnl = cur - prev
+            pct = (pnl / prev * 100) if prev > 0 else 0
+            return cur, prev, pnl, pct
+        except Exception as e:
+            print(f"⚠️ 计算本月收益失败: {e}")
+            total = self.account_data.get('total_asset', 0)
+            self._prev_key = 'N/A'
+            return total, 0, 0, 0.0
+
+    def calc_max_drawdown(self):
+        """真实最大回撤：基于历史周快照序列计算（%）"""
+        try:
+            with open(str(DATA_DIR / 'weekly-history.json'), 'r') as f:
+                history = json.load(f)
+            seq = []
+            for k, v in sorted(history.items()):
+                t = sum(a.get('total_asset', 0) for a in v.get('accounts', {}).values())
+                seq.append((k, t))
+            if not seq:
+                return 0.0
+            peak = seq[0][1]
+            maxdd = 0.0
+            for _, t in seq:
+                if t > peak:
+                    peak = t
+                dd = (t - peak) / peak * 100 if peak > 0 else 0
+                if dd < maxdd:
+                    maxdd = dd
+            return maxdd
+        except Exception as e:
+            print(f"⚠️ 计算最大回撤失败: {e}")
+            return 0.0
+
     def fetch_signals(self):
         """获取信号数据"""
         # 港股信号
@@ -119,17 +167,23 @@ class MonthlyReportV2:
         self.fetch_signals()
         
         # 计算指标
-        initial = 2000000.0  # 两账户各100万
+        initial = 2000000.0  # 两账户各100万（累计收益基准）
         total_asset = self.account_data.get('total_asset', initial)
-        total_pnl = total_asset - initial
+        total_pnl = total_asset - initial       # 累计收益（自建仓）
         total_pnl_pct = (total_pnl / initial) * 100 if initial > 0 else 0
         position_pct = (self.account_data.get('position_value', 0) / total_asset * 100) if total_asset > 0 else 0
         cash_pct = (self.account_data.get('cash', 0) / total_asset * 100) if total_asset > 0 else 0
-        max_drawdown = min(0, total_pnl_pct)
-        
-        # 统计机会
-        hk_high = [s for s in self.hk_signals if s.get('base_score', 0) >= 70]
-        us_high = [s for s in self.us_signals if s.get('score', 0) >= 70]
+
+        # 本月收益：以上月最后快照为基准（数据统一化：统一用 weekly-history 快照序列）
+        month_asset, month_start_val, month_pnl, month_pnl_pct = self.calc_month_pnl()
+        # 真实最大回撤：基于历史周快照序列计算
+        max_drawdown = self.calc_max_drawdown()
+
+        # 统计机会（数据统一化：统一用 final_score 作候选口径，阈值取策略 min_score）
+        hk_min = STRATEGY_POLICY["hk"]["min_score"]
+        us_min = STRATEGY_POLICY["us"]["min_score"]
+        hk_high = [s for s in self.hk_signals if (s.get('final_score') or s.get('score') or 0) >= hk_min]
+        us_high = [s for s in self.us_signals if (s.get('final_score') or s.get('score') or 0) >= us_min]
         
         # LLM分析
         import sys
@@ -193,9 +247,10 @@ class MonthlyReportV2:
 |------|------|------|
 | 初始资金 | $2,000,000.00 | 模拟盘初始本金（两账户） |
 | 月末总资产 | ${total_asset:,.2f} | - |
-| 本月收益 | ${total_pnl:,.2f} | {'盈利' if total_pnl >= 0 else '亏损'} |
-| 本月收益率 | {total_pnl_pct:+.2f}% | - |
-| 最大回撤 | {max_drawdown:.2f}% | 当前回撤 |
+| 本月收益 | ${month_pnl:,.2f} | 较上月快照(2026-{self._prev_key}) |
+| 本月收益率 | {month_pnl_pct:+.2f}% | - |
+| 累计收益 | ${total_pnl:,.2f} | 自建仓累计 {total_pnl_pct:+.2f}% |
+| 最大回撤 | {max_drawdown:.2f}% | 历史周快照回调 |
 | 持仓市值 | ${self.account_data.get('position_value', 0):,.2f} | 占比{position_pct:.1f}% |
 | 可用资金 | ${self.account_data.get('cash', 0):,.2f} | 占比{cash_pct:.1f}% |
 
@@ -226,8 +281,8 @@ class MonthlyReportV2:
 
 ## 📦 三、月末持仓明细
 
-| 标的代码 | 持仓数量 | 平均成本 | 当前市值 | 盈亏比例 | 止损线 | 目标价 |
-|----------|----------|----------|----------|----------|--------|--------|
+| 标的代码 | 市场 | 持仓数量 | 平均成本 | 当前市值 | 盈亏比例 | 止损线 | 目标价 |
+|----------|------|----------|----------|----------|----------|--------|--------|
 """
         
         symbol_names = {
@@ -237,13 +292,16 @@ class MonthlyReportV2:
         }
         
         if self.positions:
+            hk_note = "港"
+            us_note = "美"
             for pos in self.positions:
                 symbol = pos['symbol']
                 name = symbol_names.get(symbol, symbol)
                 cost = pos['cost']
                 stop_loss = cost * 0.94
                 target = cost * 1.15
-                report += f"| {symbol} | {pos['shares']}股 | ${cost:.2f} | ${pos['market_val']:,.2f} | {pos['pnl_pct']:+.2f}% | ${stop_loss:.2f} | ${target:.2f} |\n"
+                market_tag = us_note if pos.get('acc_id') == 15270898 else hk_note
+                report += f"| {symbol} | {market_tag} | {pos['shares']}股 | ${cost:.2f} | ${pos['market_val']:,.2f} | {pos['pnl_pct']:+.2f}% | ${stop_loss:.2f} | ${target:.2f} |\n"
         else:
             report += "| - | 无持仓 | - | - | - | - | - |\n"
 
@@ -254,12 +312,13 @@ class MonthlyReportV2:
 
         if hk_high:
             for s in hk_high[:10]:
-                report += f"| {s.get('symbol', 'N/A')} | {s.get('sector', 'N/A')} | HK${s.get('price', 0):.2f} | {s.get('base_score', 0)}分 |\n"
+                sc = s.get('final_score') or s.get('score') or s.get('base_score') or 0
+                report += f"| {s.get('symbol', 'N/A')} | {s.get('sector', 'N/A')} | HK${s.get('price', 0):.2f} | {sc}分 |\n"
         else:
             report += "| - | 无 | - | - |\n"
 
         report += """
-### 🇺🇸 美股高评分机会（≥75分）
+### 🇺🇸 美股高评分机会（≥{}分）".format(STRATEGY_POLICY["us"]["min_score"])
 
 | 标的 | 价格 | 评分 |
 |------|------|------|
@@ -267,7 +326,8 @@ class MonthlyReportV2:
         
         if us_high:
             for s in us_high[:10]:
-                report += f"| {s.get('symbol', 'N/A')} | ${s.get('price', 0):.2f} | {s.get('score', 0)}分 |\n"
+                sc = s.get('final_score') or s.get('score') or 0
+                report += f"| {s.get('symbol', 'N/A')} | ${s.get('price', 0):.2f} | {sc}分 |\n"
         else:
             report += "| - | 无 |\n"
 

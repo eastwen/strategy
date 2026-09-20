@@ -6,6 +6,7 @@ import json
 import threading
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -65,6 +66,8 @@ class PositionControlTest(unittest.TestCase):
         self.trader.open_positions_file = str(root / 'open-positions.json')
         self.trader.closed_trades_file = str(root / 'closed-trades.json')
         self.trader.staged_reductions_file = str(root / 'staged-reductions.json')
+        self.trader.us_entry_state_file = str(root / 'us-entry-timing.json')
+        self.trader.hk_entry_state_file = str(root / 'hk-entry-timing.json')
         Path(self.trader.open_positions_file).write_text('[]', encoding='utf-8')
         Path(self.trader.closed_trades_file).write_text('[]', encoding='utf-8')
         Path(self.trader.staged_reductions_file).write_text('{}', encoding='utf-8')
@@ -142,7 +145,11 @@ class PositionControlTest(unittest.TestCase):
 
         temp_data = Path(self.temp_dir.name)
         fake_tech = Mock()
-        fake_tech.get_llm_snapshot.return_value = {}
+        fake_tech.get_llm_snapshot.return_value = {
+            'rsi': 50.0,
+            'macd_state': '多头',
+            'kline_volume_ratio': 1.0,
+        }
         with patch.object(HK_SCANNER_MODULE, 'DATA_DIR', temp_data), patch(
             'technical_indicators_hk.HKTechIndicators', return_value=fake_tech,
         ), patch(
@@ -367,6 +374,255 @@ class PositionControlTest(unittest.TestCase):
         self.assertFalse(result['can_buy'])
         self.assertIn('低于交易门槛75', result['reason'])
 
+    def _mock_entry_snapshot(self, **overrides):
+        value = {
+            'current_price': 100.0,
+            'ask_price': 100.01,
+            'day_high': 101.0,
+            'near_high_distance_pct': 0.99,
+            'vwap': 99.8,
+            'ema9': 99.9,
+            'support': 99.9,
+            'pullback_ready': False,
+            'breakout_ready': False,
+            'breakout_level': 100.0,
+            'breakout_volume_ratio': 1.0,
+            'price_spread': 0.01,
+            'completed_bars': 20,
+            'quote_time': '2026-09-21 10:00:00',
+        }
+        value.update(overrides)
+        self.trader._get_intraday_entry_snapshot = Mock(return_value=(value, ''))
+        return value
+
+    def test_us_entry_timing_accepts_pullback_and_builds_protected_limit(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot(pullback_ready=True)
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 88}, now=now
+        )
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['setup'], '回踩企稳')
+        self.assertAlmostEqual(result['limit_price'], 100.26)
+
+    def test_us_intraday_snapshot_builds_vwap_from_futu_minutes(self):
+        self.trader.quote_ctx = Mock()
+        self.trader.quote_ctx.get_market_snapshot.return_value = (0, pd.DataFrame([{
+            'last_price': 100.2,
+            'ask_price': 100.21,
+            'high_price': 101.0,
+            'price_spread': 0.01,
+            'update_time': '2026-09-21 09:40:30',
+        }]))
+        self.trader.quote_ctx.subscribe.return_value = (0, None)
+        closes = [100.0, 100.1, 100.2, 100.1, 100.0, 99.9, 100.0, 100.1, 100.15, 100.2]
+        volumes = [1000] * len(closes)
+        bars = pd.DataFrame({
+            'time_key': pd.date_range('2026-09-21 09:30', periods=len(closes), freq='min').astype(str),
+            'open': closes,
+            'close': closes,
+            'high': [value + 0.1 for value in closes],
+            'low': [value - 0.1 for value in closes],
+            'volume': volumes,
+            'turnover': [price * volume for price, volume in zip(closes, volumes)],
+        })
+        self.trader.quote_ctx.get_cur_kline.return_value = (0, bars)
+
+        snapshot, error = self.trader._get_us_intraday_entry_snapshot(
+            'US.TEST',
+            now_et=datetime(2026, 9, 21, 9, 41, 0, tzinfo=AUTO_TRADER.ZoneInfo('America/New_York')),
+        )
+
+        self.assertEqual(error, '')
+        self.assertEqual(snapshot['completed_bars'], 10)
+        self.assertAlmostEqual(snapshot['vwap'], sum(closes) / len(closes))
+        self.assertGreater(snapshot['ema9'], 0)
+        self.trader.quote_ctx.unsubscribe.assert_called_once()
+
+    def test_us_entry_timing_blocks_near_high_without_breakout(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot(
+            pullback_ready=True,
+            near_high_distance_pct=0.2,
+            day_high=100.2,
+        )
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 88}, now=now
+        )
+
+        self.assertFalse(result['ready'])
+        self.assertIn('距日内高点', result['reason'])
+
+    def test_us_entry_timing_allows_confirmed_breakout_near_high(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot(
+            breakout_ready=True,
+            breakout_level=99.8,
+            breakout_volume_ratio=1.5,
+            near_high_distance_pct=0.1,
+        )
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 90}, now=now
+        )
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['setup'], '放量突破确认')
+
+    def test_hk_entry_timing_uses_hk_state_and_market_snapshot(self):
+        now = datetime(2026, 9, 21, 10, 0)
+        self._mock_entry_snapshot(pullback_ready=True)
+
+        result = self.trader.evaluate_entry_timing(
+            'HK.00700', 500,
+            market='hk',
+            opp={'timestamp': now.isoformat(), 'final_score': 88},
+            now=now,
+        )
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['setup'], '回踩企稳')
+        self.assertTrue(Path(self.trader.hk_entry_state_file).exists())
+        self.assertFalse(Path(self.trader.us_entry_state_file).exists())
+        kwargs = self.trader._get_intraday_entry_snapshot.call_args.kwargs
+        self.assertEqual(kwargs['market'], 'hk')
+
+    def test_us_entry_timing_blocks_price_chasing(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot(
+            current_price=102.0,
+            ask_price=102.01,
+            day_high=103.0,
+            pullback_ready=True,
+        )
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 95}, now=now
+        )
+
+        self.assertFalse(result['ready'])
+        self.assertIn('追高上限', result['reason'])
+
+    def test_us_entry_timing_expires_after_thirty_minutes(self):
+        start = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot()
+        opp = {'timestamp': start.isoformat(), 'final_score': 88}
+
+        first = self.trader.evaluate_us_entry_timing('US.TEST', 100, opp=opp, now=start)
+        expired = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp=opp, now=start + timedelta(minutes=31)
+        )
+
+        self.assertFalse(first['ready'])
+        self.assertFalse(expired['ready'])
+        self.assertIn('本次放弃', expired['reason'])
+        self.assertEqual(self.trader._get_intraday_entry_snapshot.call_count, 1)
+
+    def test_prepare_buy_order_uses_live_entry_price(self):
+        self.trader.get_market_sentiment_multiplier = lambda: (
+            1.0, 70.0, 'test', 1.0, {'sentiment_score': 70},
+        )
+        self.trader.evaluate_entry_timing = Mock(return_value={
+            'ready': True,
+            'current_price': 110.0,
+            'limit_price': 110.2,
+            'signal_id': 'TEST|signal',
+            'order_expires_at': '2026-09-21T22:02:00',
+            'setup': '回踩企稳',
+        })
+        account = {
+            'total_assets': 1_000_000,
+            'cash': 1_000_000,
+            'market_val': 0,
+            'positions': [],
+        }
+
+        result = self.trader.prepare_buy_order(
+            account, 'US.TEST', 100, 75, market='us', opp={'timestamp': 'now'}
+        )
+
+        self.assertTrue(result['can_buy'])
+        self.assertEqual(result['quantity'], 545)
+        self.assertEqual(result['execution_price'], 110.0)
+        self.assertEqual(result['limit_price'], 110.2)
+        self.assertAlmostEqual(result['order_value'], 59_950)
+
+    def test_prepare_hk_buy_order_uses_entry_timing_and_board_lot(self):
+        self.trader.evaluate_entry_timing = Mock(return_value={
+            'ready': True,
+            'current_price': 110.0,
+            'limit_price': 110.2,
+            'signal_id': 'hk|TEST|signal',
+            'order_expires_at': '2026-09-21T10:02:00',
+            'setup': '回踩企稳',
+        })
+        account = {
+            'total_assets': 1_000_000,
+            'cash': 1_000_000,
+            'market_val': 0,
+            'positions': [],
+        }
+
+        result = self.trader.prepare_buy_order(
+            account, 'HK.00700', 100, 80,
+            market='hk', lot_size=100, opp={'timestamp': 'now'},
+        )
+
+        self.assertTrue(result['can_buy'])
+        self.assertEqual(result['quantity'] % 100, 0)
+        self.assertEqual(result['execution_price'], 110.0)
+        self.assertEqual(result['limit_price'], 110.2)
+        self.trader.evaluate_entry_timing.assert_called_once_with(
+            'HK.00700', 100.0, market='hk', opp={'timestamp': 'now'}
+        )
+
+    def test_place_order_uses_protected_limit_for_us_buy(self):
+        self.trader.trade_ctx = Mock()
+        self.trader.trade_ctx.position_list_query.return_value = (
+            0, pd.DataFrame(columns=['qty'])
+        )
+        self.trader.trade_ctx.order_list_query.return_value = (
+            0, pd.DataFrame(columns=['order_status'])
+        )
+        self.trader.trade_ctx.place_order.return_value = (
+            0, pd.DataFrame([{'order_id': 'test-order'}])
+        )
+
+        success, order_id = self.trader.place_order(
+            'US.TEST', 'BUY', 100, market='us', limit_price=100.25
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(order_id, 'test-order')
+        kwargs = self.trader.trade_ctx.place_order.call_args.kwargs
+        self.assertEqual(kwargs['price'], 100.25)
+        self.assertEqual(kwargs['order_type'], AUTO_TRADER.OrderType.NORMAL)
+
+    def test_place_order_uses_protected_limit_for_hk_buy(self):
+        self.trader.hk_trade_ctx = Mock()
+        self.trader.hk_trade_ctx.position_list_query.return_value = (
+            0, pd.DataFrame(columns=['qty'])
+        )
+        self.trader.hk_trade_ctx.order_list_query.return_value = (
+            0, pd.DataFrame(columns=['order_status'])
+        )
+        self.trader.hk_trade_ctx.place_order.return_value = (
+            0, pd.DataFrame([{'order_id': 'hk-test-order'}])
+        )
+
+        success, order_id = self.trader.place_order(
+            'HK.00700', 'BUY', 100, market='hk', limit_price=500.2
+        )
+
+        self.assertTrue(success)
+        self.assertEqual(order_id, 'hk-test-order')
+        kwargs = self.trader.hk_trade_ctx.place_order.call_args.kwargs
+        self.assertEqual(kwargs['price'], 500.2)
+        self.assertEqual(kwargs['order_type'], AUTO_TRADER.OrderType.NORMAL)
+
     def test_should_trade_ignores_zero_quantity_futu_rows(self):
         allowed, reason = self.trader.should_trade(
             'US.ZERO',
@@ -472,6 +728,9 @@ class PositionControlTest(unittest.TestCase):
                 'score': 78,
                 'reasons': ['测试买入'],
                 'created_at': '2026-07-17T11:54:26',
+                'signal_price': 10.0,
+                'limit_price': 10.3,
+                'entry_setup': '回踩企稳',
             },
         }), encoding='utf-8')
         context = Mock()
@@ -514,6 +773,10 @@ class PositionControlTest(unittest.TestCase):
         self.assertEqual(records[0]['entry_price'], 10.25)
         self.assertEqual(records[0]['atr_stop'], 9.2)
         pusher.send_buy_notification.assert_called_once()
+        notification = pusher.send_buy_notification.call_args.kwargs
+        self.assertEqual(notification['signal_price'], 10.0)
+        self.assertEqual(notification['protected_limit'], 10.3)
+        self.assertEqual(notification['entry_setup'], '回踩企稳')
 
 
 if __name__ == '__main__':

@@ -178,19 +178,13 @@ class ComprehensiveReportV11:
 
         统计当前持仓的盈亏情况，按策略版本分组
         """
-        # 筛选持仓
-        def is_hk_symbol(sym):
-            s = str(sym).replace('HK.', '').replace('US.', '')
-            return s.isdigit() or s.startswith('0')
-        def is_us_symbol(sym):
-            s = str(sym).replace('HK.', '').replace('US.', '')
-            return not s.isdigit() and not s.startswith('0') and not s.startswith('0')
-        if market == 'hk':
-            positions = [p for poss in self.positions_by_account.values()
-                        for p in poss if is_hk_symbol(p.get('symbol', ''))]
-        else:
-            positions = [p for poss in self.positions_by_account.values()
-                        for p in poss if is_us_symbol(p.get('symbol', ''))]
+        # 筛选持仓：统一化 — 直接按账户ID划分市场，避免符号启发式误判
+        # 15270898=美股(MARGIN)，15270899=港股(CASH)
+        US_ACC_ID = 15270898
+        HK_ACC_ID = 15270899
+        target_acc = HK_ACC_ID if market == 'hk' else US_ACC_ID
+        positions = [p for poss in self.positions_by_account.values()
+                    for p in poss if p.get('acc_id', 0) == target_acc]
 
         if not positions:
             return None

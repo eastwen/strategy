@@ -1964,12 +1964,15 @@ class USScanner:
                     print(f"   ⏭️ {symbol}: 技术指标不满足")
                     continue
 
-                order_plan = trader.prepare_buy_order(account, futu_symbol, price, score, market='us')
+                order_plan = trader.prepare_buy_order(
+                    account, futu_symbol, price, score, market='us', opp=opp
+                )
                 if not order_plan.get('can_buy'):
                     print(f"   ⏭️ {symbol}: {order_plan.get('reason', '风控未通过')}")
                     continue
 
                 quantity = order_plan['quantity']
+                entry_price = order_plan['execution_price']
 
                 if quantity > 0:
                     print(
@@ -1979,18 +1982,26 @@ class USScanner:
                         f"总仓位{order_plan['after_total_pct']:.1f}%/{order_plan['total_limit_pct']:.0f}%"
                     )
                     print(f"\n   🎯 准备买入 {symbol}")
-                    print(f"      价格: ${price:.2f}")
+                    print(f"      实时价格: ${entry_price:.2f}")
+                    print(f"      保护限价: ${order_plan['limit_price']:.4f}")
                     print(f"      数量: {quantity}股")
                     print(f"      评分: {score}分")
 
                     # 执行交易 (不再重复LLM分析,因为已经分析过了)
                     entry_reasons = [f"评分{score}分"] + tech_signals.get('reasons', [])
+                    if order_plan.get('entry_setup'):
+                        entry_reasons.append(f"盘中买点: {order_plan['entry_setup']}")
                     success = trader.execute_trade(
-                        futu_symbol, 'BUY', quantity, price, 'us',
+                        futu_symbol, 'BUY', quantity, entry_price, 'us',
                         skip_llm=True,  # 跳过重复LLM分析
                         score=score,
                         reasons=entry_reasons,
                         opp=opp,
+                        limit_price=order_plan.get('limit_price'),
+                        entry_signal_id=order_plan.get('entry_signal_id', ''),
+                        order_expires_at=order_plan.get('order_expires_at'),
+                        signal_price=price,
+                        entry_setup=order_plan.get('entry_setup', ''),
                     )
 
                     if success:
