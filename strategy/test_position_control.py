@@ -395,17 +395,19 @@ class PositionControlTest(unittest.TestCase):
         self.trader._get_intraday_entry_snapshot = Mock(return_value=(value, ''))
         return value
 
-    def test_us_entry_timing_accepts_pullback_and_builds_protected_limit(self):
+    def test_us_entry_timing_builds_passive_day_limit_without_expiry(self):
         now = datetime(2026, 9, 21, 22, 0)
-        self._mock_entry_snapshot(pullback_ready=True)
+        self._mock_entry_snapshot()
 
         result = self.trader.evaluate_us_entry_timing(
             'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 88}, now=now
         )
 
         self.assertTrue(result['ready'])
-        self.assertEqual(result['setup'], '回踩企稳')
-        self.assertAlmostEqual(result['limit_price'], 100.26)
+        self.assertEqual(result['setup'], 'DAY被动限价等待回踩')
+        self.assertAlmostEqual(result['limit_price'], 99.7)
+        self.assertIsNone(result['order_expires_at'])
+        self.assertIn('挂DAY被动限价', result['reason'])
 
     def test_us_intraday_snapshot_builds_vwap_from_futu_minutes(self):
         self.trader.quote_ctx = Mock()
@@ -443,6 +445,9 @@ class PositionControlTest(unittest.TestCase):
 
     def test_us_entry_timing_blocks_near_high_without_breakout(self):
         now = datetime(2026, 9, 21, 22, 0)
+        self.trader.us_config['entry_timing'] = {
+            **self.trader.us_config['entry_timing'], 'mode': 'confirmed_entry'
+        }
         self._mock_entry_snapshot(
             pullback_ready=True,
             near_high_distance_pct=0.2,
@@ -458,6 +463,9 @@ class PositionControlTest(unittest.TestCase):
 
     def test_us_entry_timing_allows_confirmed_breakout_near_high(self):
         now = datetime(2026, 9, 21, 22, 0)
+        self.trader.us_config['entry_timing'] = {
+            **self.trader.us_config['entry_timing'], 'mode': 'confirmed_entry'
+        }
         self._mock_entry_snapshot(
             breakout_ready=True,
             breakout_level=99.8,
@@ -492,6 +500,9 @@ class PositionControlTest(unittest.TestCase):
 
     def test_us_entry_timing_blocks_price_chasing(self):
         now = datetime(2026, 9, 21, 22, 0)
+        self.trader.us_config['entry_timing'] = {
+            **self.trader.us_config['entry_timing'], 'mode': 'confirmed_entry'
+        }
         self._mock_entry_snapshot(
             current_price=102.0,
             ask_price=102.01,
@@ -508,6 +519,9 @@ class PositionControlTest(unittest.TestCase):
 
     def test_us_entry_timing_expires_after_thirty_minutes(self):
         start = datetime(2026, 9, 21, 22, 0)
+        self.trader.us_config['entry_timing'] = {
+            **self.trader.us_config['entry_timing'], 'mode': 'confirmed_entry'
+        }
         self._mock_entry_snapshot()
         opp = {'timestamp': start.isoformat(), 'final_score': 88}
 
@@ -600,6 +614,7 @@ class PositionControlTest(unittest.TestCase):
         kwargs = self.trader.trade_ctx.place_order.call_args.kwargs
         self.assertEqual(kwargs['price'], 100.25)
         self.assertEqual(kwargs['order_type'], AUTO_TRADER.OrderType.NORMAL)
+        self.assertEqual(kwargs['time_in_force'], AUTO_TRADER.TimeInForce.DAY)
 
     def test_place_order_uses_protected_limit_for_hk_buy(self):
         self.trader.hk_trade_ctx = Mock()
@@ -622,6 +637,7 @@ class PositionControlTest(unittest.TestCase):
         kwargs = self.trader.hk_trade_ctx.place_order.call_args.kwargs
         self.assertEqual(kwargs['price'], 500.2)
         self.assertEqual(kwargs['order_type'], AUTO_TRADER.OrderType.NORMAL)
+        self.assertEqual(kwargs['time_in_force'], AUTO_TRADER.TimeInForce.DAY)
 
     def test_should_trade_ignores_zero_quantity_futu_rows(self):
         allowed, reason = self.trader.should_trade(
@@ -777,6 +793,39 @@ class PositionControlTest(unittest.TestCase):
         self.assertEqual(notification['signal_price'], 10.0)
         self.assertEqual(notification['protected_limit'], 10.3)
         self.assertEqual(notification['entry_setup'], '回踩企稳')
+
+    def test_pending_day_buy_is_not_cancelled_without_local_expiry(self):
+        pending_path = Path(self.temp_dir.name) / 'pending-buy-orders.json'
+        pending_path.write_text(json.dumps({
+            'DAY-ORDER': {
+                'order_id': 'DAY-ORDER',
+                'symbol': 'US.TEST',
+                'market': 'us',
+                'quantity': 10,
+                'score': 88,
+                'reasons': ['测试DAY挂单'],
+                'created_at': '2026-09-22T00:00:00',
+                'expires_at': None,
+            },
+        }), encoding='utf-8')
+        context = Mock()
+        context.order_list_query.return_value = (
+            AUTO_TRADER.RET_OK,
+            pd.DataFrame([{
+                'order_id': 'DAY-ORDER',
+                'order_status': 'SUBMITTED',
+                'dealt_avg_price': 0,
+                'dealt_qty': 0,
+            }]),
+        )
+        self.trader.trade_ctx = context
+
+        with patch.object(AUTO_TRADER, 'DATA_DIR', Path(self.temp_dir.name)):
+            self.trader.reconcile_pending_buys()
+
+        remaining = json.loads(pending_path.read_text(encoding='utf-8'))
+        self.assertIn('DAY-ORDER', remaining)
+        context.modify_order.assert_not_called()
 
 
 if __name__ == '__main__':
