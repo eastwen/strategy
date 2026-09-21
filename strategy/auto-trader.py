@@ -2463,13 +2463,14 @@ class AutoTrader:
                 self._save_entry_states(market, states)
                 return {'ready': False, 'reason': f'候选信号超过{max_signal_age:g}分钟，禁止使用旧信号', 'signal_id': signal_id}
 
-            passive_day_limit = (
-                market == 'us' and cfg.get('mode') == 'passive_day_limit'
+            us_day_limit_mode = (
+                market == 'us'
+                and cfg.get('mode') in ('passive_day_limit', 'trend_or_passive_day_limit')
             )
             first_seen = self._parse_entry_datetime(state.get('first_seen')) or now
             watch_minutes = float(cfg.get('watch_minutes', 30))
             age_minutes = max(0.0, (now - first_seen).total_seconds() / 60)
-            if not passive_day_limit and age_minutes > watch_minutes:
+            if not us_day_limit_mode and age_minutes > watch_minutes:
                 state.update(status='expired', updated_at=now.isoformat(), last_reason='观察窗口已过期')
                 states[target] = state
                 self._save_entry_states(market, states)
@@ -2493,27 +2494,50 @@ class AutoTrader:
             setup = ''
             currency = 'HK$' if market == 'hk' else '$'
             limit_price = None
-            if passive_day_limit:
-                discount_pct = float(cfg.get('passive_discount_pct', 0.3)) / 100
+            if us_day_limit_mode:
                 tick = snapshot['price_spread']
-                passive_cap = min(
-                    current_price * (1 - discount_pct),
-                    max(tick, snapshot['ask_price'] - tick),
-                )
-                candidates = [passive_cap, snapshot['support']]
-                if signal_price > 0:
-                    candidates.append(signal_price)
-                raw_limit = min(value for value in candidates if value > 0)
-                limit_price = math.floor((raw_limit + 1e-12) / tick) * tick
                 decimals = max(2, min(4, len(f'{tick:.8f}'.rstrip('0').split('.')[-1])))
-                limit_price = round(limit_price, decimals)
-                ready = limit_price > 0 and limit_price + 1e-9 < snapshot['ask_price']
-                setup = 'DAY被动限价等待回踩' if ready else ''
-                reason = (
-                    f'挂DAY被动限价{currency}{limit_price:.4f}，'
-                    f'现价{currency}{current_price:.4f}，'
-                    f'VWAP/EMA9支撑{currency}{snapshot["support"]:.4f}'
-                ) if ready else '无法生成低于卖一价的有效被动限价'
+                trend_continuation = (
+                    current_price + 1e-9 >= snapshot['support']
+                    and drift_pct <= max_drift
+                )
+                if trend_continuation and cfg.get('mode') == 'trend_or_passive_day_limit':
+                    buffer_pct = float(cfg.get('limit_buffer_pct', 0.25)) / 100
+                    max_limit = min(
+                        current_price * 1.003,
+                        signal_price * (1 + max_drift / 100),
+                    )
+                    raw_limit = min(snapshot['ask_price'] * (1 + buffer_pct), max_limit)
+                    limit_price = math.floor((raw_limit + 1e-12) / tick) * tick
+                    limit_price = round(limit_price, decimals)
+                    ready = limit_price + 1e-9 >= snapshot['ask_price']
+                    if ready:
+                        setup = '趋势延续保护限价'
+                        reason = (
+                            f'现价站稳VWAP/EMA9支撑{currency}{snapshot["support"]:.4f}，'
+                            f'较信号价{drift_pct:+.2f}%，保护限价{currency}{limit_price:.4f}'
+                        )
+
+                if not ready:
+                    # 跌破支撑、涨幅超过追高上限，或保护价低于卖一时，改挂DAY回踩单。
+                    discount_pct = float(cfg.get('passive_discount_pct', 0.3)) / 100
+                    passive_cap = min(
+                        current_price * (1 - discount_pct),
+                        max(tick, snapshot['ask_price'] - tick),
+                    )
+                    candidates = [passive_cap, snapshot['support']]
+                    if signal_price > 0:
+                        candidates.append(signal_price)
+                    raw_limit = min(value for value in candidates if value > 0)
+                    limit_price = math.floor((raw_limit + 1e-12) / tick) * tick
+                    limit_price = round(limit_price, decimals)
+                    ready = limit_price > 0 and limit_price + 1e-9 < snapshot['ask_price']
+                    setup = 'DAY被动限价等待回踩' if ready else ''
+                    reason = (
+                        f'挂DAY被动限价{currency}{limit_price:.4f}，'
+                        f'现价{currency}{current_price:.4f}，'
+                        f'VWAP/EMA9支撑{currency}{snapshot["support"]:.4f}'
+                    ) if ready else '无法生成低于卖一价的有效被动限价'
             elif drift_pct > max_drift:
                 reason = f'等待回落：现价较信号价上涨{drift_pct:.2f}%，超过{max_drift:.2f}%追高上限'
             elif snapshot['breakout_ready']:
@@ -2532,7 +2556,7 @@ class AutoTrader:
             else:
                 reason = f'等待回踩企稳或放量突破确认（VWAP {currency}{snapshot["vwap"]:.4f}，EMA9 {currency}{snapshot["ema9"]:.4f}）'
 
-            if ready and not passive_day_limit:
+            if ready and not us_day_limit_mode:
                 buffer_pct = float(cfg.get('limit_buffer_pct', 0.25)) / 100
                 max_limit = min(current_price * 1.003, signal_price * (1 + max_drift / 100))
                 raw_limit = min(snapshot['ask_price'] * (1 + buffer_pct), max_limit)
@@ -2573,7 +2597,7 @@ class AutoTrader:
                 'current_price': current_price,
                 'limit_price': limit_price,
                 'signal_id': signal_id,
-                'order_expires_at': None if passive_day_limit else (
+                'order_expires_at': None if us_day_limit_mode else (
                     now + timedelta(seconds=int(cfg.get('order_ttl_seconds', 120)))
                 ).isoformat(),
                 'metrics': snapshot,

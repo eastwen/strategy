@@ -397,7 +397,11 @@ class PositionControlTest(unittest.TestCase):
 
     def test_us_entry_timing_builds_passive_day_limit_without_expiry(self):
         now = datetime(2026, 9, 21, 22, 0)
-        self._mock_entry_snapshot()
+        self._mock_entry_snapshot(
+            current_price=99.0,
+            ask_price=99.01,
+            support=99.9,
+        )
 
         result = self.trader.evaluate_us_entry_timing(
             'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 88}, now=now
@@ -405,9 +409,40 @@ class PositionControlTest(unittest.TestCase):
 
         self.assertTrue(result['ready'])
         self.assertEqual(result['setup'], 'DAY被动限价等待回踩')
-        self.assertAlmostEqual(result['limit_price'], 99.7)
+        self.assertAlmostEqual(result['limit_price'], 98.7)
         self.assertIsNone(result['order_expires_at'])
         self.assertIn('挂DAY被动限价', result['reason'])
+
+    def test_us_entry_timing_enters_trend_with_protected_day_limit(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot()
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 88}, now=now
+        )
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['setup'], '趋势延续保护限价')
+        self.assertAlmostEqual(result['limit_price'], 100.26)
+        self.assertIsNone(result['order_expires_at'])
+        self.assertIn('现价站稳VWAP/EMA9支撑', result['reason'])
+
+    def test_us_entry_timing_does_not_chase_above_signal_drift_limit(self):
+        now = datetime(2026, 9, 21, 22, 0)
+        self._mock_entry_snapshot(
+            current_price=102.0,
+            ask_price=102.01,
+            support=101.0,
+        )
+
+        result = self.trader.evaluate_us_entry_timing(
+            'US.TEST', 100, opp={'timestamp': now.isoformat(), 'final_score': 95}, now=now
+        )
+
+        self.assertTrue(result['ready'])
+        self.assertEqual(result['setup'], 'DAY被动限价等待回踩')
+        self.assertAlmostEqual(result['limit_price'], 100.0)
+        self.assertLess(result['limit_price'], result['current_price'])
 
     def test_us_intraday_snapshot_builds_vwap_from_futu_minutes(self):
         self.trader.quote_ctx = Mock()

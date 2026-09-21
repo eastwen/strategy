@@ -37,10 +37,10 @@ OPENCLAW_HOME = Path(os.getenv("OPENCLAW_HOME", Path.home() / ".openclaw")).expa
 SKILLS_DIR = Path(os.getenv("OPENCLAW_SKILLS_DIR", OPENCLAW_HOME / "skills")).expanduser().resolve()
 
 # Single source of truth for strategy thresholds shown in reports and enforced by runners.
-SYSTEM_VERSION = "v2.8"
+SYSTEM_VERSION = "v2.9"
 HK_STRATEGY_VERSION = "v2.3"
-US_STRATEGY_VERSION = "v1.9"
-SYSTEM_UPDATED = "2026-09-21"
+US_STRATEGY_VERSION = "v2.0"
+SYSTEM_UPDATED = "2026-09-22"
 HK_STRATEGY_UPDATED = SYSTEM_UPDATED
 US_STRATEGY_UPDATED = SYSTEM_UPDATED
 
@@ -53,7 +53,7 @@ STRATEGY_POLICY = {
         "market_sentiment_rules": "≥65 正常；55-64 为90%；45-54 为80%；35-44 为60%；25-34 为50%；<25 暂停开仓",
         "entry_timing": {
             "enabled": True,
-            "mode": "passive_day_limit",
+            "mode": "trend_or_passive_day_limit",
             "watch_minutes": 30,
             "max_signal_age_minutes": 120,
             "max_signal_drift_pct": 1.5,
@@ -113,7 +113,7 @@ def format_strategy_policy_markdown() -> str:
 - 交易候选线：综合评分≥{us["min_score"]}；非交易时段提醒线：{us["opp_alert_score"]}
 - 动态仓位：{us["score_position_rules"]}；单票上限：{us["single_position_limit"] * 100:.0f}%
 - 市场情绪总仓位：{us["market_sentiment_rules"]}
-- 盘中买点：日线条件通过后立即按信号价、VWAP/EMA9支撑位与现价回撤价的较低值挂DAY限价单；不追价、不主动撤单，未成交由富途收盘失效
+- 盘中买点：日线条件通过且现价站稳VWAP/EMA9、未超过信号价1.5%时以保护限价单直接入场；否则挂DAY被动限价等待回踩；不主动撤单，未成交由富途收盘失效
 - 风控：ATR动态止盈止损，浮盈≥{risk["trailing_profit_trigger_pct"]}%后从最高价回撤{risk["trailing_drawdown_pct"]}%触发追踪止盈，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损；时间维度退出：满{risk["us_max_holding_trading_days"]}个交易日仍未触发止损止盈且浮盈<{risk["time_exit_min_profit_pct"]:.0f}%则全平认错，浮盈≥{risk["time_exit_min_profit_pct"]:.0f}%则止损提到保本位继续持有
 
 """
@@ -132,7 +132,7 @@ def format_strategy_policy_compact() -> str:
         f"港股盘中买点：候选观察{hk['entry_timing']['watch_minutes']}分钟，回踩VWAP/EMA9企稳或放量突破后限价入场\n"
         f"美股交易线：{us['min_score']}分；非交易提醒线：{us['opp_alert_score']}分；"
         f"动态仓位：{us['score_position_rules']}；单票上限{us['single_position_limit'] * 100:.0f}%\n"
-        f"美股盘中买点：条件通过后立即挂DAY被动限价单，不追价、不主动撤单，未成交收盘失效\n"
+        f"美股盘中买点：站稳VWAP/EMA9且未超过信号价1.5%时保护限价直入，否则挂DAY被动限价等待回踩；不主动撤单\n"
         f"共同风控：浮亏达到{abs(risk['hard_stop_loss_pct'])}%触发硬止损；"
         f"浮盈达到{risk['trailing_profit_trigger_pct']:.0f}%后，从最高价回撤"
         f"{risk['trailing_drawdown_pct']:.0f}%触发追踪止盈；ATR目标优先于固定估算价；"
