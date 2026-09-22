@@ -34,6 +34,7 @@ from runtime_config import (
 
 # 仅第一层达到该分数的标的进入耗时的五源第二层；最终交易线仍由策略配置控制。
 LAYER2_CANDIDATE_MIN_SCORE = 65
+LAYER2_MAX_WORKERS = 4
 
 # 第一层历史流动性闸门。数量本身不作为单独通行条件，避免高价股因股数少被误伤。
 MIN_LAYER1_ACTIVE_SESSIONS = 15
@@ -1573,7 +1574,7 @@ class USScanner:
             key=lambda c: c.get('score', 0),
             reverse=True,
         )
-        layer2_workers = getattr(self, '_scan_max_workers', 3)
+        layer2_workers = LAYER2_MAX_WORKERS
         if layer2_budget >= 12 * 60:
             finalize_reserve = min(6 * 60, max(60, layer2_budget // 4))
         else:
