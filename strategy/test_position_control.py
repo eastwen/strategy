@@ -184,22 +184,22 @@ class PositionControlTest(unittest.TestCase):
         self.assertNotIn('港股未启用五源第二层', prompt)
         self.assertNotIn('第一层79×90%', prompt)
 
-    def test_us_layer2_candidate_threshold_is_65(self):
+    def test_us_layer2_candidate_threshold_is_70(self):
         scanner = object.__new__(USScanner)
         scanner.news_sentiment = {}
         scanner.sp500 = []
         scanner.nasdaq = []
         scanner._layer1_drop_stats = {'dropped': 0, 'near_miss': []}
         scanner._drop_stats_lock = threading.Lock()
-        scanner.calculate_score = lambda *args: 64
+        scanner.calculate_score = lambda *args: 69
         self.assertIsNone(
             scanner._build_quote_candidate('TEST', 100, 99, 1, 'test')
         )
 
-        scanner.calculate_score = lambda *args: 65
+        scanner.calculate_score = lambda *args: 70
         candidate = scanner._build_quote_candidate('TEST', 100, 99, 1, 'test')
         self.assertIsNotNone(candidate)
-        self.assertEqual(candidate['score'], 65)
+        self.assertEqual(candidate['score'], 70)
 
     def test_us_score_position_bands_include_75_to_79(self):
         expected = {
