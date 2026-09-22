@@ -938,7 +938,7 @@ class USScanner:
                 continue
         return None
 
-    def scan_with_finnhub(self, top_n=50, time_budget_seconds=2040, max_workers=3):
+    def scan_with_finnhub(self, top_n=50, time_budget_seconds=2040, max_workers=4):
         """使用Finnhub扫描。第一层动态预算，默认最多约34分钟，给第二层保底25分钟。
         支持多线程并发扫描加速（max_workers），超时后返回已扫到的结果。"""
         print(f"  使用数据源: Finnhub (时间预算 {time_budget_seconds//60} 分钟, 并发{max_workers})")
@@ -1357,7 +1357,7 @@ class USScanner:
         print(f"✅ TinkClaw扫描完成: 找到 {len(results)} 个AI信号机会")
         return results
 
-    def scan(self, top_n=50, max_workers=3):
+    def scan(self, top_n=50, max_workers=4):
         """扫描美股市场"""
         self._scan_max_workers = max_workers
         total_budget_seconds = 59 * 60
