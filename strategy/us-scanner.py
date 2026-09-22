@@ -1437,7 +1437,7 @@ class USScanner:
         # 无论本轮使用主源还是备用源，都在汇总后执行同一套流动性过滤。
         results = self._filter_candidates_by_liquidity(results)
         results.sort(key=lambda x: x['base_score'], reverse=True)
-        # 所有第一层评分达到候选线的标的进入五源深度评分；LLM 仍只处理五源 Top 20。
+        # 所有第一层评分达到候选线的标的进入五源深度评分；LLM 仍只处理五源 Top 50。
         all_candidates = results
 
         self.save_results(all_candidates)
@@ -1526,7 +1526,7 @@ class USScanner:
         min_position = 5000
         skip_llm = buying_power < min_position
 
-        # 🎯 五源补算覆盖候选池；LLM 在五源评分完成后再处理真实评分 Top 20
+        # 🎯 五源补算覆盖候选池；LLM 在五源评分完成后再处理真实评分 Top 50
         TOP_LLM_N = 50
         if not skip_llm:
             print(f"   🧠 LLM 将在五源评分后处理真实评分 Top {TOP_LLM_N}")
@@ -1849,7 +1849,7 @@ class USScanner:
                             candidate['llm_status'] = 'failed'
                     else:
                         # 2026-08-20 east 铁律修正（AAPL事件）: 非TopN候选不再"跳过LLM直接放行"。
-                        # 铁律：没过 LLM 就不能下单。Top 20 以外的候选保留评分用于展示/观察，
+                        # 铁律：没过 LLM 就不能下单。Top 50 以外的候选保留评分用于展示/观察，
                         # 但 llm_passed=False，auto-trader 永远不会买它们。
                         candidate['final_score'] = candidate.get('score', 70)
                         candidate['llm_adjust'] = 0

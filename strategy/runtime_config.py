@@ -108,7 +108,7 @@ def format_strategy_policy_markdown() -> str:
 - 风控：ATR动态止盈止损，浮亏≥{abs(risk["hard_stop_loss_pct"]):.0f}%硬止损；时间维度退出：满{risk["hk_max_holding_trading_days"]}个交易日仍未触发止损止盈且浮盈<{risk["time_exit_min_profit_pct"]:.0f}%则全平认错，浮盈≥{risk["time_exit_min_profit_pct"]:.0f}%则止损提到保本位继续持有
 
 ### 🇺🇸 美股策略（{us["version"]}，配置更新：{us["updated"]}）
-- 五源共振后仅将 Top 20 送入 LLM；LLM失败或未通过不交易
+- 五源共振后仅将 Top 50 送入 LLM；LLM失败或未通过不交易
 - 计分口径：多源原始证据先合并去重再统一计分，单源失败不扣分，五源中性基线合计50分
 - 交易候选线：综合评分≥{us["min_score"]}；非交易时段提醒线：{us["opp_alert_score"]}
 - 动态仓位：{us["score_position_rules"]}；单票上限：{us["single_position_limit"] * 100:.0f}%
