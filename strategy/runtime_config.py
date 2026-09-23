@@ -37,11 +37,11 @@ OPENCLAW_HOME = Path(os.getenv("OPENCLAW_HOME", Path.home() / ".openclaw")).expa
 SKILLS_DIR = Path(os.getenv("OPENCLAW_SKILLS_DIR", OPENCLAW_HOME / "skills")).expanduser().resolve()
 
 # Single source of truth for strategy thresholds shown in reports and enforced by runners.
-SYSTEM_VERSION = "v2.9"
+SYSTEM_VERSION = "v3.0"
 HK_STRATEGY_VERSION = "v2.3"
-US_STRATEGY_VERSION = "v2.0"
-SYSTEM_UPDATED = "2026-09-22"
-HK_STRATEGY_UPDATED = SYSTEM_UPDATED
+US_STRATEGY_VERSION = "v2.1"
+SYSTEM_UPDATED = "2026-09-23"
+HK_STRATEGY_UPDATED = "2026-09-22"
 US_STRATEGY_UPDATED = SYSTEM_UPDATED
 
 STRATEGY_POLICY = {
@@ -109,6 +109,7 @@ def format_strategy_policy_markdown() -> str:
 
 ### 🇺🇸 美股策略（{us["version"]}，配置更新：{us["updated"]}）
 - 五源共振后仅将 Top 50 送入 LLM；LLM失败或未通过不交易
+- 股票池：仅标普500及NASDAQ普通股/ADR/REIT，且已验证市值不低于5亿美元
 - 计分口径：多源原始证据先合并去重再统一计分，单源失败不扣分，五源中性基线合计50分
 - 交易候选线：综合评分≥{us["min_score"]}；非交易时段提醒线：{us["opp_alert_score"]}
 - 动态仓位：{us["score_position_rules"]}；单票上限：{us["single_position_limit"] * 100:.0f}%

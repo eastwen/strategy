@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import os
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -20,6 +21,20 @@ NASDAQ_URL = 'https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt'
 FINNHUB_URL = 'https://finnhub.io/api/v1/stock/symbol'
 HEADERS = {'User-Agent': 'Mozilla/5.0 stock-pool-updater/1.0'}
 FINNHUB_EQUITY_TYPES = {'Common Stock', 'ADR', 'REIT'}
+MIN_MARKET_CAP_USD = 500_000_000
+LONGBRIDGE_BATCH_SIZE = 500
+
+
+def _is_supported_nasdaq_security(row):
+    """Keep operating equities; reject warrants, rights, units and preferred shares."""
+    if row.get('Test Issue') != 'N' or row.get('ETF') != 'N':
+        return False
+    name = str(row.get('Security Name') or '').strip()
+    excluded = re.compile(
+        r'\b(warrants?|rights?|units?|preferred|preference)\b',
+        re.IGNORECASE,
+    )
+    return not excluded.search(name)
 
 
 def _symbols(values):
@@ -100,13 +115,52 @@ def fetch_nasdaq():
     rows = csv.DictReader(io.StringIO(response.text), delimiter='|')
     symbols = _symbols(
         row.get('Symbol') for row in rows
-        if row.get('Test Issue') == 'N'
-        and row.get('ETF') == 'N'
+        if _is_supported_nasdaq_security(row)
     )
     if len(symbols) < 3000:
         raise ValueError(f'纳斯达克正常上市股票数量异常: {len(symbols)}')
-    print(f'✅ 纳斯达克全部上市非ETF: {len(symbols)}只')
+    print(f'✅ 纳斯达克普通股/ADR/REIT: {len(symbols)}只')
     return symbols
+
+
+def fetch_market_caps_longbridge(symbols, keys):
+    """Batch market caps from real Longbridge shares and quotes."""
+    config = keys.get('longbridge', {})
+    required = ('app_key', 'app_secret', 'token')
+    if not all(config.get(key) for key in required):
+        raise RuntimeError('长桥配置不完整，无法执行市值股票池过滤')
+
+    from longbridge.openapi import Config, QuoteContext
+
+    client_config = Config.from_apikey(
+        config['app_key'], config['app_secret'], config['token'],
+    )
+    quote_ctx = QuoteContext(client_config)
+    market_caps = {}
+    unique_symbols = list(dict.fromkeys(symbols))
+    for offset in range(0, len(unique_symbols), LONGBRIDGE_BATCH_SIZE):
+        batch = unique_symbols[offset:offset + LONGBRIDGE_BATCH_SIZE]
+        longbridge_symbols = [f'{symbol}.US' for symbol in batch]
+        static_rows = quote_ctx.static_info(longbridge_symbols)
+        quote_rows = quote_ctx.quote(longbridge_symbols)
+        shares_by_symbol = {
+            str(row.symbol).removesuffix('.US'): int(row.total_shares or 0)
+            for row in static_rows
+        }
+        price_by_symbol = {
+            str(row.symbol).removesuffix('.US'): float(row.last_done or 0)
+            for row in quote_rows
+        }
+        for symbol in batch:
+            shares = shares_by_symbol.get(symbol, 0)
+            price = price_by_symbol.get(symbol, 0)
+            if shares > 0 and price > 0:
+                market_caps[symbol] = shares * price
+    if len(market_caps) < max(1, int(len(unique_symbols) * 0.8)):
+        raise RuntimeError(
+            f'长桥市值覆盖异常: {len(market_caps)}/{len(unique_symbols)}，停止更新以防误删'
+        )
+    return market_caps
 
 
 def fetch_finnhub(api_key):
@@ -139,12 +193,34 @@ def _optional_source(name, fetcher, api_key):
         return []
 
 
-def build_updated_pool(sp500, nasdaq, finnhub=None, existing_custom=None):
+def build_updated_pool(
+    sp500, nasdaq, finnhub=None, existing_custom=None, market_caps=None,
+):
     finnhub = finnhub or []
     custom = _symbols(existing_custom)
-    all_symbols = list(dict.fromkeys(
+    unfiltered_symbols = list(dict.fromkeys(
         sp500 + nasdaq + finnhub + custom
     ))
+    if market_caps is None:
+        all_symbols = unfiltered_symbols
+        market_cap_excluded = []
+        market_cap_unresolved = []
+    else:
+        market_cap_excluded = [
+            symbol for symbol in unfiltered_symbols
+            if 0 < float(market_caps.get(symbol, 0)) < MIN_MARKET_CAP_USD
+        ]
+        market_cap_unresolved = [
+            symbol for symbol in unfiltered_symbols if not market_caps.get(symbol)
+        ]
+        # Strict pool gate: unresolved capitalization cannot be verified as >= $500m.
+        excluded = set(market_cap_excluded + market_cap_unresolved)
+        all_symbols = [symbol for symbol in unfiltered_symbols if symbol not in excluded]
+        allowed = set(all_symbols)
+        sp500 = [symbol for symbol in sp500 if symbol in allowed]
+        nasdaq = [symbol for symbol in nasdaq if symbol in allowed]
+        finnhub = [symbol for symbol in finnhub if symbol in allowed]
+        custom = [symbol for symbol in custom if symbol in allowed]
     source_sets = tuple(map(set, (
         sp500, nasdaq, finnhub,
     )))
@@ -160,6 +236,14 @@ def build_updated_pool(sp500, nasdaq, finnhub=None, existing_custom=None):
             if sum(symbol in source for source in source_sets) > 1
         ),
         'unique_count': len(all_symbols),
+        'market_cap_filter': {
+            'minimum_usd': MIN_MARKET_CAP_USD,
+            'excluded_count': len(market_cap_excluded),
+            'excluded_symbols': market_cap_excluded,
+            'unresolved_excluded_count': len(market_cap_unresolved),
+            'unresolved_excluded_symbols': market_cap_unresolved,
+            'source': 'Longbridge total_shares x last_done',
+        },
         'updated_at': datetime.now().isoformat(),
         'update_source': 'S&P 500 + Nasdaq Trader + Finnhub Nasdaq',
         'source_counts': {
@@ -188,12 +272,19 @@ def main():
         'Finnhub', fetch_finnhub,
         keys.get('finnhub', {}).get('api_key', ''),
     )
+    raw_symbols = list(dict.fromkeys(
+        sp500 + nasdaq + finnhub + _symbols(existing.get('custom', []))
+    ))
+    market_caps = fetch_market_caps_longbridge(raw_symbols, keys)
     payload = build_updated_pool(
         sp500, nasdaq, finnhub,
         existing_custom=existing.get('custom', []),
+        market_caps=market_caps,
     )
     print(
-        f"📊 最终美股池: 多源合并去重后共{payload['unique_count']}只"
+        f"📊 最终美股池: 多源合并去重后共{payload['unique_count']}只，"
+        f"市值<$5亿剔除{payload['market_cap_filter']['excluded_count']}只，"
+        f"市值未解析并剔除{payload['market_cap_filter']['unresolved_excluded_count']}只"
     )
     if args.dry_run:
         print('🧪 dry-run：未写入文件')
